@@ -9,7 +9,7 @@ research tool, not an investment recommendation or automated trading system.
 
 ## What the demo proves
 
-- Ticker is runtime input; `AAPL`, `NVDA`, `HPE`, and other supported tickers are
+- Ticker is runtime input; `AAPL`, `NVDA`, and other supported tickers are
   not hardcoded.
 - SEC EDGAR, yfinance, and Marketaux are isolated behind separate clients.
 - Vendor payloads are normalized before reaching application or HTTP layers.
