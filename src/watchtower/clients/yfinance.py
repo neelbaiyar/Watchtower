@@ -41,6 +41,8 @@ class DailyPriceSnapshot:
 
 
 class _Ticker(Protocol):
+    # This narrow protocol is the seam used by tests; they need only the two
+    # yfinance operations this adapter actually calls.
     def history(self, **kwargs: object) -> Any: ...
 
     def get_history_metadata(self) -> Any: ...
@@ -60,6 +62,8 @@ class YFinanceClient:
         if timeout_seconds <= 0:
             raise ValueError("price timeout must be greater than zero")
 
+        # Production uses yfinance; tests can provide a small pretend ticker to
+        # verify parsing and price calculations without the network.
         self._ticker_factory = ticker_factory or yf.Ticker
         self._timeout = timeout_seconds
 
@@ -70,6 +74,8 @@ class YFinanceClient:
         provider_ticker = self._ticker_factory(normalized_ticker)
 
         try:
+            # Request five calendar days so weekends and market holidays still
+            # usually leave at least two actual daily closes to compare.
             history = provider_ticker.history(
                 period="5d",
                 interval="1d",
@@ -98,6 +104,8 @@ class YFinanceClient:
                 f"price provider returned no closing prices for {normalized_ticker}"
             )
 
+        # Negative indexes mean "last" and "second-to-last" values. Missing
+        # closes were removed above, so these are real trading-day observations.
         latest_close = self._validate_price(close_values.iloc[-1])
         previous_close = (
             self._validate_price(close_values.iloc[-2])
@@ -109,6 +117,8 @@ class YFinanceClient:
 
         change: float | None = None
         change_percent: float | None = None
+        # A single available close is still useful, but there is no honest daily
+        # change to calculate until a previous close exists.
         if previous_close is not None:
             change = latest_close - previous_close
             change_percent = (change / previous_close) * 100

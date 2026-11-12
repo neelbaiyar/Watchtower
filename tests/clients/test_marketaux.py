@@ -1,3 +1,5 @@
+"""Marketaux boundary tests with an in-process HTTP transport."""
+
 from datetime import UTC, datetime
 
 import httpx
@@ -30,6 +32,8 @@ NEWS_PAYLOAD = {
 def build_client(
     transport: httpx.MockTransport,
 ) -> tuple[MarketauxClient, httpx.Client]:
+    # MockTransport intercepts requests in memory, so tests exercise request
+    # construction and response parsing without using an API token or network.
     http_client = httpx.Client(transport=transport)
     client = MarketauxClient(api_token=API_TOKEN, http_client=http_client)
     return client, http_client
@@ -43,6 +47,8 @@ def test_headlines_are_requested_and_normalized() -> None:
         assert request.url.params["filter_entities"] == "true"
         assert request.url.params["language"] == "en"
         assert request.url.params["limit"] == "2"
+        # This is provider-shaped input; later assertions inspect only the
+        # Watchtower-owned NewsHeadline that the client returns.
         return httpx.Response(200, json=NEWS_PAYLOAD)
 
     client, http_client = build_client(httpx.MockTransport(handle_request))

@@ -1,3 +1,5 @@
+"""Contract tests for Watchtower's public JSON schema models."""
+
 from datetime import UTC, date, datetime
 
 import pytest
@@ -11,6 +13,8 @@ from watchtower.schemas.company_snapshot import (
 
 
 def valid_snapshot_data() -> dict[str, object]:
+    # This is deliberately Watchtower-shaped data, not copied provider JSON. It
+    # acts as the shared valid baseline for validation-focused test cases.
     retrieved_at = "2026-09-25T16:00:00Z"
     return {
         "ticker": "HPE",

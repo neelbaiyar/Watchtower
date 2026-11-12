@@ -1,3 +1,5 @@
+"""Service tests with fakes that expose orchestration order and data flow."""
+
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -9,6 +11,8 @@ from watchtower.services.company_snapshot import CompanySnapshotService
 
 
 class FakeSecClient:
+    # These fakes match the service Protocols, so this test verifies the real
+    # coordination code while avoiding SEC, Yahoo, and news-provider requests.
     PROVIDER_NAME = "SEC EDGAR"
 
     def __init__(self) -> None:
@@ -94,6 +98,8 @@ class FakeNewsClient:
 
 
 class SequenceClock:
+    # Advancing one second per call makes every retrieval timestamp predictable
+    # and proves the service records provenance separately for each source.
     def __init__(self, start: datetime) -> None:
         self._next = start
 
@@ -107,6 +113,8 @@ def build_service(
     *,
     clock: SequenceClock | None = None,
 ) -> tuple[CompanySnapshotService, FakeSecClient, FakePriceClient, FakeNewsClient]:
+    # One helper creates a complete service plus the fakes needed to inspect
+    # which ticker each provider received.
     sec_client = FakeSecClient()
     price_client = FakePriceClient()
     news_client = FakeNewsClient()
@@ -125,6 +133,8 @@ def test_service_composes_clients_into_public_snapshot() -> None:
 
     snapshot = service.get_company_snapshot(" hpe ")
 
+    # SEC receives the original input to resolve it, then all later provider
+    # calls use its normalized ticker identity.
     assert sec_client.requested_tickers == [" hpe ", "HPE"]
     assert price_client.requested_tickers == ["HPE"]
     assert news_client.requested_tickers == ["HPE"]

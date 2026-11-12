@@ -72,14 +72,20 @@ class SecEdgarClient:
         if timeout_seconds <= 0:
             raise ValueError("SEC timeout must be greater than zero")
 
+        # SEC requires an identifying User-Agent. Keep all request policy in
+        # this client so callers cannot accidentally omit it.
         self._headers = {
             "User-Agent": normalized_user_agent,
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate",
         }
         self._timeout = timeout_seconds
+        # Tests inject a fake HTTP client; production owns and later closes the
+        # real client it creates here.
         self._http = http_client or httpx.Client()
         self._owns_http_client = http_client is None
+        # The ticker mapping changes slowly, so cache it for this process and
+        # avoid downloading the whole SEC mapping for every ticker request.
         self._companies_by_ticker: dict[str, SecCompany] | None = None
 
     def close(self) -> None:
@@ -117,12 +123,16 @@ class SecEdgarClient:
         if limit < 1:
             raise ValueError("SEC filing limit must be at least one")
 
+        # A ticker is for users; the CIK is the SEC's stable identifier used in
+        # the submissions endpoint and archive URLs.
         company = self.resolve_company(ticker)
         submissions_url = self.SUBMISSIONS_URL_TEMPLATE.format(cik=company.cik)
         payload = self._get_json(submissions_url)
         recent = self._extract_recent_filings(payload)
 
         filings: list[SecFiling] = []
+        # SEC returns parallel arrays. The same index identifies one filing
+        # across form, date, accession, and primary-document fields.
         for index, form in enumerate(recent["form"]):
             if form != "8-K":
                 continue
@@ -135,6 +145,7 @@ class SecEdgarClient:
             report_date = self._parse_optional_date(
                 recent["reportDate"][index], field="reportDate"
             )
+            # SEC archive folders remove hyphens from the accession number.
             filing_url = self.ARCHIVES_URL_TEMPLATE.format(
                 cik=int(company.cik),
                 accession=accession_number.replace("-", ""),
@@ -174,6 +185,8 @@ class SecEdgarClient:
             raise SecPayloadError("SEC ticker mapping must be a JSON object")
 
         companies: dict[str, SecCompany] = {}
+        # The mapping uses numeric JSON-object keys, so the record values—not
+        # their keys—contain the company identity data we need.
         for raw_record in payload.values():
             if not isinstance(raw_record, dict):
                 continue
@@ -247,6 +260,8 @@ class SecEdgarClient:
                 )
             arrays[field] = values
 
+        # Parallel arrays are safe only when every required field has the same
+        # length; otherwise indexing could combine data from different filings.
         lengths = {len(values) for values in arrays.values()}
         if len(lengths) != 1:
             raise SecPayloadError("SEC recent filing arrays have inconsistent lengths")

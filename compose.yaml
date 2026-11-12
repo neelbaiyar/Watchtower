@@ -7,7 +7,11 @@ services:
       # Localhost-only access keeps this development database off the network.
       - "127.0.0.1:5432:5432"
     volumes:
+      # The named volume survives container restarts; deleting the container
+      # alone does not erase locally collected filing history.
       - watchtower_postgres_data:/var/lib/postgresql
+      # PostgreSQL runs these versioned schema files only on first database
+      # initialization, which keeps local setup reproducible.
       - ./infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]

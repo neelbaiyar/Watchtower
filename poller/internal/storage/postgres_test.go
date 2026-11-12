@@ -1,3 +1,5 @@
+// PostgreSQL integration tests are opt-in because they use a real local
+// database. Unit tests elsewhere run without Docker or credentials.
 package storage
 
 import (
@@ -13,6 +15,8 @@ const testDatabaseURLVariable = "WATCHTOWER_TEST_DATABASE_URL"
 
 func TestPostgresSeenStoreMarksFilingOnlyOnce(t *testing.T) {
 	databaseURL := os.Getenv(testDatabaseURLVariable)
+	// Skipping is intentional: this file checks real SQL semantics only when a
+	// caller explicitly supplies the isolated test database connection.
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL integration test", testDatabaseURLVariable)
 	}
@@ -30,6 +34,8 @@ func TestPostgresSeenStoreMarksFilingOnlyOnce(t *testing.T) {
 		Form:            "8-K",
 		FilingDate:      time.Date(2026, time.September, 26, 0, 0, 0, 0, time.UTC),
 	}
+	// Clean this exact primary-key row so repeated local runs begin from the
+	// same state without touching any other collected filings.
 	if _, err := pool.Exec(ctx,
 		"DELETE FROM sec_filings WHERE cik = $1 AND accession_number = $2",
 		filing.CIK,
@@ -74,6 +80,8 @@ func TestRecordPollBaselinesThenCreatesOneRefreshRequest(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	cik := "0000320193"
+	// Clear child rows before parent rows because the foreign key protects
+	// referential integrity, just as it will in production.
 	if _, err := pool.Exec(ctx, "DELETE FROM sec_refresh_requests WHERE cik = $1", cik); err != nil {
 		t.Fatalf("clear refresh requests: %v", err)
 	}
@@ -89,6 +97,8 @@ func TestRecordPollBaselinesThenCreatesOneRefreshRequest(t *testing.T) {
 		t.Fatalf("NewPostgresSeenStore() error = %v", err)
 	}
 
+	// The initial poll establishes history but emits no refresh request; only a
+	// later accession should become downstream work.
 	baselineFiling := testFiling(cik, "0000320193-26-000001")
 	baseline, err := store.RecordPoll(ctx, cik, []edgar.Filing{baselineFiling})
 	if err != nil {
@@ -145,6 +155,8 @@ func TestRecordPollRollsBackWhenOneFilingHasTheWrongCIK(t *testing.T) {
 		t.Fatalf("NewPostgresSeenStore() error = %v", err)
 	}
 
+	// The second filing violates the service invariant after the first one has
+	// been staged. The following counts prove the transaction rolled both back.
 	_, err = store.RecordPoll(ctx, cik, []edgar.Filing{
 		testFiling(cik, "0000789019-26-000001"),
 		testFiling("0000320193", "0000320193-26-000003"),

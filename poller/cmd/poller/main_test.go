@@ -1,3 +1,4 @@
+// This test exercises the process lifecycle without starting real polling.
 package main
 
 import (
@@ -12,11 +13,14 @@ import (
 func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 	t.Parallel()
 
+	// A cancelable context is the test-friendly stand-in for a user pressing
+	// Control-C. No operating-system signal needs to reach `go test`.
 	ctx, cancel := context.WithCancel(context.Background())
 	var output bytes.Buffer
 	logger := log.New(&output, "", 0)
 	result := make(chan error, 1)
 
+	// run blocks, so run it concurrently and collect its eventual return value.
 	go func() {
 		result <- run(ctx, logger)
 	}()
@@ -25,6 +29,8 @@ func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 	// does not need to send a real interrupt to the test process.
 	cancel()
 
+	// The timeout converts a stuck shutdown into a clear failed test instead of
+	// letting the test suite hang forever.
 	select {
 	case err := <-result:
 		if err != nil {

@@ -22,6 +22,8 @@ from watchtower.schemas.company_snapshot import (
 
 
 class SecClient(Protocol):
+    # A Protocol describes the methods the service needs, allowing real clients
+    # and test fakes to be swapped without changing service code.
     PROVIDER_NAME: str
 
     def resolve_company(self, ticker: str) -> SecCompany: ...
@@ -57,24 +59,33 @@ class CompanySnapshotService:
         news_client: NewsClient,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
+        # Dependencies enter at construction time instead of being created in
+        # the method below. That is dependency injection and keeps tests local.
         self._sec_client = sec_client
         self._price_client = price_client
         self._news_client = news_client
+        # A controllable clock makes retrieval timestamps deterministic in tests.
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def get_company_snapshot(self, ticker: str) -> CompanySnapshotResponse:
         """Build a company snapshot from normalized provider records."""
 
+        # SEC resolution happens first. A nonexistent ticker fails before we
+        # spend a limited news-provider request.
         company = self._sec_client.resolve_company(ticker)
         filings = self._sec_client.get_recent_8k_filings(company.ticker)
         filings_retrieved_at = self._now()
 
+        # Price is cheap context. News stays last because its free-tier request
+        # budget is the most constrained of the three sources.
         price = self._price_client.get_daily_price(company.ticker)
         price_retrieved_at = self._now()
 
         headlines = self._news_client.get_headlines(company.ticker)
         news_retrieved_at = self._now()
 
+        # This is the application boundary: internal provider records become
+        # public Pydantic schema objects with Watchtower-controlled field names.
         return CompanySnapshotResponse(
             ticker=company.ticker,
             company_name=company.name,
@@ -112,6 +123,8 @@ class CompanySnapshotService:
 
     def _now(self) -> datetime:
         value = self._clock()
+        # Naive datetimes are ambiguous across machines and daylight-saving
+        # changes, so public retrieval timestamps are normalized to UTC.
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("snapshot clock must return a timezone-aware datetime")
         return value.astimezone(UTC)

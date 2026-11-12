@@ -1,3 +1,5 @@
+"""SEC client tests that simulate provider JSON with a local HTTP transport."""
+
 from datetime import date
 
 import httpx
@@ -43,6 +45,8 @@ SUBMISSIONS_PAYLOAD = {
 def build_client(
     handler: httpx.MockTransport,
 ) -> tuple[SecEdgarClient, httpx.Client]:
+    # A mock HTTP client makes the fixture deterministic and prevents tests
+    # from hitting the real SEC service or its rate limit.
     http_client = httpx.Client(transport=handler)
     client = SecEdgarClient(
         user_agent="Watchtower tests test@example.com",
@@ -103,6 +107,8 @@ def test_ticker_mapping_is_cached_for_multiple_lookups() -> None:
     finally:
         http_client.close()
 
+    # A process-local mapping cache avoids paying for the large SEC mapping on
+    # every ticker lookup while still normalizing separate company records.
     assert mapping_requests == 1
 
 

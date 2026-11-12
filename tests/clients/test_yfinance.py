@@ -1,3 +1,5 @@
+"""Price-client tests using a minimal stand-in for yfinance's ticker object."""
+
 from collections import UserDict
 from datetime import date
 
@@ -12,6 +14,8 @@ from watchtower.clients.yfinance import (
 
 
 class FakeTicker:
+    # The fake returns a pandas table because that is the external shape the
+    # real adapter must translate, but it never contacts Yahoo Finance.
     def __init__(
         self,
         history: pd.DataFrame,
@@ -42,6 +46,8 @@ def test_daily_price_is_normalized_from_history() -> None:
     fake_ticker = FakeTicker(history, metadata=UserDict({"currency": "USD"}))
     requested_tickers: list[str] = []
 
+    # Factory injection lets the test observe ticker normalization and supply
+    # one controlled provider object.
     def ticker_factory(ticker: str) -> FakeTicker:
         requested_tickers.append(ticker)
         return fake_ticker

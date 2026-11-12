@@ -1,3 +1,5 @@
+"""HTTP-boundary tests using an injected service instead of live providers."""
+
 from datetime import UTC, datetime
 
 import pytest
@@ -10,6 +12,8 @@ from watchtower.schemas import CompanySnapshotResponse
 
 
 def snapshot_response() -> CompanySnapshotResponse:
+    # Build a valid public response once so route tests focus on HTTP behavior,
+    # not unrelated provider parsing.
     retrieved_at = datetime(2026, 9, 25, 16, 0, tzinfo=UTC)
     return CompanySnapshotResponse.model_validate(
         {
@@ -50,6 +54,8 @@ def snapshot_response() -> CompanySnapshotResponse:
 
 
 class FakeSnapshotService:
+    # This fake implements exactly the service method the route calls and records
+    # its input, making it possible to assert that invalid paths stop early.
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
         self.requested_tickers: list[str] = []
@@ -64,6 +70,8 @@ class FakeSnapshotService:
 def test_snapshot_route_returns_owned_response() -> None:
     service = FakeSnapshotService()
 
+    # The injected service avoids network calls while FastAPI still performs
+    # real routing, validation, serialization, and exception handling.
     with TestClient(create_app(snapshot_service=service)) as client:
         response = client.get("/companies/HPE/snapshot")
 
@@ -141,4 +149,6 @@ def test_owned_errors_become_controlled_http_responses(
 
     assert response.status_code == expected_status
     assert response.json() == {"detail": expected_detail}
+    # Provider internals should not become part of the API contract or leak to
+    # a caller even when a provider failed.
     assert "private details" not in response.text

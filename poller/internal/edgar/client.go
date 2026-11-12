@@ -74,6 +74,8 @@ func (c *Client) Recent8K(ctx context.Context, cik string, limit int) ([]Filing,
 		return nil, fmt.Errorf("%w: must be at least one", ErrInvalidLimit)
 	}
 
+	// JoinPath handles slash boundaries safely instead of assembling a URL by
+	// string concatenation. The CIK has already passed strict validation.
 	requestURL, err := url.JoinPath(c.baseURL, "submissions", "CIK"+cik+".json")
 	if err != nil {
 		return nil, fmt.Errorf("%w: build submissions URL: %w", ErrRequestFailed, err)
@@ -85,10 +87,14 @@ func (c *Client) Recent8K(ctx context.Context, cik string, limit int) ([]Filing,
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
 
+	// RequestWithContext lets shutdown or a caller timeout cancel this outbound
+	// request instead of leaving a poller blocked indefinitely.
 	response, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrRequestFailed, err)
 	}
+	// Always release the response body so the HTTP client can reuse its
+	// connection on later polls.
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
@@ -117,6 +123,8 @@ type recentFilingsPayload struct {
 }
 
 func (recent recentFilingsPayload) normalized8K(cik string, limit int) ([]Filing, error) {
+	// The SEC encodes each filing across parallel arrays. Equal lengths are the
+	// minimum proof that matching indexes still refer to one disclosure.
 	if len(recent.AccessionNumbers) != len(recent.Forms) ||
 		len(recent.Forms) != len(recent.FilingDates) {
 		return nil, fmt.Errorf("%w: filing fields have different lengths", ErrInvalidPayload)
@@ -124,6 +132,8 @@ func (recent recentFilingsPayload) normalized8K(cik string, limit int) ([]Filing
 
 	filings := make([]Filing, 0, limit)
 	for index, form := range recent.Forms {
+		// The client intentionally narrows this milestone to unscheduled 8-Ks;
+		// other form types are preserved by the SEC but out of scope here.
 		if form != "8-K" {
 			continue
 		}

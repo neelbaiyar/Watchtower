@@ -13,6 +13,8 @@ router = APIRouter(prefix="/companies", tags=["Company snapshots"])
 def get_snapshot_service(request: Request) -> CompanySnapshotService:
     """Return the application-owned snapshot service for this process."""
 
+    # The route does not construct clients; it reuses the app-owned service
+    # created during lifespan startup.
     return request.app.state.snapshot_service
 
 
@@ -35,6 +37,8 @@ def get_snapshot_service(request: Request) -> CompanySnapshotService:
 def get_company_snapshot(
     ticker: Annotated[
         str,
+        # Path validates only the ticker's *shape*. SEC lookup later decides
+        # whether that formatted ticker actually exists.
         Path(
             min_length=1,
             max_length=10,
@@ -46,4 +50,6 @@ def get_company_snapshot(
 ) -> CompanySnapshotResponse:
     """Compose current Watchtower data for one ticker."""
 
+    # This stays intentionally thin: HTTP concerns end here and the service
+    # owns the provider-call order plus response composition.
     return service.get_company_snapshot(ticker)

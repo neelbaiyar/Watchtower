@@ -1,3 +1,4 @@
+// The detector test proves idempotency with a deliberately tiny fake SEC source.
 package detector
 
 import (
@@ -24,6 +25,8 @@ func TestPollOnceReportsEachAccessionOnlyOnce(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
+	// The first observation is new; the exact same accession on the next pass
+	// must be ignored even though the source returns it again.
 	firstPass, err := detector.PollOnce(context.Background(), "0000320193")
 	if err != nil {
 		t.Fatalf("first PollOnce() error = %v", err)
@@ -51,6 +54,8 @@ func TestPollOnceReportsEachAccessionOnlyOnce(t *testing.T) {
 }
 
 type fakeFilingSource struct {
+	// The recorded call values show that Detector forwards its caller's CIK and
+	// its configured limit instead of hardcoding either one.
 	filings []edgar.Filing
 	calls   int
 	cik     string

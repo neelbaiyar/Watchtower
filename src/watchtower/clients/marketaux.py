@@ -62,6 +62,8 @@ class MarketauxClient:
         if timeout_seconds <= 0:
             raise ValueError("news timeout must be greater than zero")
 
+        # The token stays private inside the provider boundary and is never
+        # returned in a schema, log message, or public HTTP response.
         self._api_token = normalized_token
         self._timeout = timeout_seconds
         self._http = http_client or httpx.Client()
@@ -88,6 +90,7 @@ class MarketauxClient:
         """Return up to ``limit`` recent English-language ticker headlines."""
 
         normalized_ticker = self._normalize_ticker(ticker)
+        # Enforce our own free-tier cap before a request leaves Watchtower.
         if not 1 <= limit <= self.FREE_PLAN_MAX_ARTICLES:
             raise ValueError(
                 f"headline limit must be between 1 and {self.FREE_PLAN_MAX_ARTICLES}"
@@ -124,6 +127,8 @@ class MarketauxClient:
         except httpx.HTTPError as exc:
             raise NewsRequestError("news provider request failed") from exc
 
+        # Status-specific errors let the API choose an honest response instead
+        # of treating bad credentials and temporary rate limits the same way.
         if response.status_code in {401, 403}:
             raise NewsAuthenticationError("news provider rejected credentials")
         if response.status_code == 429:
@@ -159,6 +164,7 @@ class MarketauxClient:
         source = cls._required_string(article, "source")
         published_at = cls._parse_published_at(article.get("published_at"))
 
+        # Preserve only safe, navigable article links in Watchtower's contract.
         parsed_url = urlsplit(url)
         if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
             raise NewsPayloadError("news provider returned an invalid article URL")
@@ -201,6 +207,8 @@ class MarketauxClient:
                 "news provider returned an invalid publication time"
             ) from exc
 
+        # Providers may omit a timezone. Treating a naive timestamp as UTC is a
+        # documented fallback, then normalize every result to one standard.
         if published_at.tzinfo is None:
             published_at = published_at.replace(tzinfo=UTC)
         return published_at.astimezone(UTC)

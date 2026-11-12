@@ -4,8 +4,9 @@ Watchtower is a source-grounded technology company research API. Given a ticker,
 it combines recent SEC 8-K filings, a daily market-price snapshot, and current
 headline metadata into one Watchtower-owned JSON response.
 
-This repository currently contains the first complete vertical slice. It is a
-research tool, not an investment recommendation or automated trading system.
+This repository contains a complete FastAPI research-snapshot slice and a
+local-only Go foundation for durable SEC 8-K ingestion. It is a research tool,
+not an investment recommendation or automated trading system.
 
 ## What the demo proves
 
@@ -42,6 +43,8 @@ raw vendor JSON.
 
 - Python 3.14
 - [`uv`](https://docs.astral.sh/uv/)
+- Go 1.27 or later, for the optional local poller
+- Docker Desktop, for the optional local PostgreSQL database
 - A free [Marketaux](https://www.marketaux.com/) API token
 - A monitored email address for the SEC-declared `User-Agent`
 
@@ -95,7 +98,7 @@ Under **Company snapshots**, open **GET /companies/{ticker}/snapshot**, select
 Suggested demo sequence:
 
 1. Query `AAPL` or `NVDA` to demonstrate general ticker input.
-2. Query `HPE` as the second example.
+2. Query a second supported ticker of your choice.
 3. Point out each provider name and retrieval timestamp in the response.
 4. Open a returned SEC filing or news URL to demonstrate provenance.
 
@@ -105,7 +108,7 @@ You can also query the API from another terminal:
 curl --fail --silent http://127.0.0.1:8000/companies/AAPL/snapshot \
   | python -m json.tool
 
-curl --fail --silent http://127.0.0.1:8000/companies/HPE/snapshot \
+curl --fail --silent http://127.0.0.1:8000/companies/NVDA/snapshot \
   | python -m json.tool
 ```
 
@@ -114,6 +117,42 @@ one Marketaux request, so avoid repeatedly refreshing `/docs` examples without a
 reason.
 
 Stop the server with `Control-C`.
+
+## Optional local Go poller
+
+The Go poller is local-only. Its explicit `--once` mode retrieves recent 8-Ks
+for configured SEC CIKs, records the first result as a baseline, and persists
+later unseen filings with one refresh request each. It does not run a recurring
+schedule yet.
+
+First create the ignored local PostgreSQL configuration:
+
+```bash
+cp infra/postgres/.env.example infra/postgres/.env
+docker compose up -d
+```
+
+Set these values in the root `.env` file. The database password in its URL must
+match the one in `infra/postgres/.env`. A CIK is the SEC's ten-digit permanent
+company identifier; it is not a ticker.
+
+```text
+WATCHTOWER_POLLER_DATABASE_URL="postgres://watchtower:your-local-password@127.0.0.1:5432/watchtower?sslmode=disable"
+WATCHTOWER_POLLER_CIKS="your-ten-digit-cik,your-second-ten-digit-cik"
+```
+
+Then run one bounded pass:
+
+```bash
+cd poller
+set -a
+source ../.env
+set +a
+go run ./cmd/poller --once
+```
+
+Without `--once`, the command starts and waits for `Control-C`; it makes no
+SEC or database request.
 
 ## Response structure
 
@@ -158,10 +197,12 @@ uv run pytest -q
   about that company.
 - yfinance is an unofficial Yahoo Finance wrapper and can throttle or change.
 - Marketaux's free plan is rate-limited.
-- The demo performs live provider calls and has no cache or background polling.
+- The FastAPI snapshot endpoint performs live provider calls and has no cache.
+- The Go poller has an explicit one-shot mode, but no recurring scheduler.
 - No ML model, sentiment score, ranking, knowledge graph, or consequence engine
   is part of this milestone.
 
-Background polling, cache-backed reads, and EDGAR-triggered news refreshes are
-post-demo work. Proprietary scoring or model logic will remain outside this
-public repository and behind a typed boundary when that milestone arrives.
+Recurring polling, cache-backed reads, and consumption of EDGAR-triggered
+refresh requests are future work. Proprietary scoring or model logic will
+remain outside this public repository and behind a typed boundary when that
+milestone arrives.

@@ -34,11 +34,15 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # A supplied service is a test seam: tests avoid real SEC, price, and
+        # news providers while exercising the same HTTP routes.
         if snapshot_service is not None:
             app.state.snapshot_service = snapshot_service
             yield
             return
 
+        # Production creates provider clients once at startup, not once per
+        # request. The context managers close their HTTP connections on exit.
         active_settings = settings or Settings.from_environment()
         with (
             SecEdgarClient(user_agent=active_settings.sec_user_agent) as sec_client,
@@ -46,6 +50,8 @@ def create_app(
                 api_token=active_settings.marketaux_api_token
             ) as news_client,
         ):
+            # app.state is FastAPI's process-local place for dependencies that
+            # routes retrieve later through Depends.
             app.state.snapshot_service = CompanySnapshotService(
                 sec_client=sec_client,
                 price_client=YFinanceClient(),
@@ -74,12 +80,16 @@ def create_app(
         ],
         swagger_ui_parameters={"docExpansion": "full"},
     )
+    # Route declarations and provider-error translation are registered after
+    # the application object exists, keeping the factory easy to test.
     app.include_router(router)
     _register_exception_handlers(app)
     return app
 
 
 def _register_exception_handlers(app: FastAPI) -> None:
+    # Provider-specific exceptions never cross the public HTTP boundary. These
+    # handlers turn them into stable API responses without leaking vendor data.
     async def ticker_not_found_handler(
         _: Request,
         __: SecTickerNotFoundError,

@@ -18,7 +18,8 @@ type FilingSource interface {
 }
 
 // SeenStore atomically records whether Watchtower has already observed an
-// accession number. PostgreSQL will later provide durable behavior here.
+// accession number. PostgreSQL is the durable implementation; the memory
+// implementation below remains useful for fast unit tests.
 type SeenStore interface {
 	MarkSeen(ctx context.Context, filing edgar.Filing) (isNew bool, err error)
 }
@@ -31,6 +32,8 @@ type Detector struct {
 }
 
 func New(source FilingSource, seen SeenStore, limit int) (*Detector, error) {
+	// Reject invalid collaborators early. A usable detector can then assume its
+	// dependencies and filing limit are valid during every polling pass.
 	if source == nil {
 		return nil, fmt.Errorf("%w: filing source is required", ErrInvalidConfiguration)
 	}
@@ -53,6 +56,8 @@ func (d *Detector) PollOnce(ctx context.Context, cik string) ([]edgar.Filing, er
 
 	newFilings := make([]edgar.Filing, 0, len(filings))
 	for _, filing := range filings {
+		// MarkSeen is the idempotency boundary: it tells us whether this exact
+		// (CIK, accession) pair is new without exposing storage internals here.
 		isNew, err := d.seen.MarkSeen(ctx, filing)
 		if err != nil {
 			return nil, fmt.Errorf("record filing %s: %w", filing.AccessionNumber, err)
@@ -72,6 +77,8 @@ type MemorySeenStore struct {
 }
 
 func NewMemorySeenStore() *MemorySeenStore {
+	// The map is a set; the value carries no data because key membership is all
+	// duplicate detection needs in this small test implementation.
 	return &MemorySeenStore{accessionNumbers: make(map[string]struct{})}
 }
 

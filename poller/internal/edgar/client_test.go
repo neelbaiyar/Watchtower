@@ -1,3 +1,4 @@
+// This package uses Go's local HTTP test server as a controlled SEC boundary.
 package edgar
 
 import (
@@ -12,6 +13,8 @@ import (
 func TestRecent8KNormalizesExpectedFilings(t *testing.T) {
 	t.Parallel()
 
+	// The handler verifies Watchtower's outbound request before returning a
+	// minimal SEC-shaped response; no request leaves this computer.
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
 			t.Errorf("method = %q, want GET", request.Method)
@@ -51,6 +54,8 @@ func TestRecent8KNormalizesExpectedFilings(t *testing.T) {
 	}
 
 	wantDate := time.Date(2026, time.September, 21, 0, 0, 0, 0, time.UTC)
+	// The assertion compares a Watchtower Filing, proving raw SEC arrays do not
+	// escape the client boundary.
 	if filings[0] != (Filing{
 		CIK:             "0000320193",
 		AccessionNumber: "0002",

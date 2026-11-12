@@ -11,6 +11,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl
 class WatchtowerResponseModel(BaseModel):
     """Strict, immutable base for public response models."""
 
+    # Every public response shares these rules: no provider-only extra fields,
+    # no mutable snapshots after validation, and no invalid float values.
     model_config = ConfigDict(
         allow_inf_nan=False,
         extra="forbid",
@@ -29,6 +31,7 @@ class SourceMetadata(WatchtowerResponseModel):
 class FilingResponse(WatchtowerResponseModel):
     """Public metadata for one SEC 8-K filing."""
 
+    # Pydantic validates this public contract before FastAPI serializes JSON.
     accession_number: str = Field(pattern=r"^\d{10}-\d{2}-\d{6}$")
     form: Literal["8-K"]
     filing_date: date

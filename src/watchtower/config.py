@@ -23,6 +23,8 @@ class Settings:
         cls,
         environment: Mapping[str, str] | None = None,
     ) -> Settings:
+        # Tests pass a tiny dictionary here; production reads the process
+        # environment populated from the ignored local .env file.
         values = environment if environment is not None else os.environ
         required = {
             "WATCHTOWER_SEC_USER_AGENT": values.get(
@@ -32,6 +34,8 @@ class Settings:
                 "WATCHTOWER_MARKETAUX_API_TOKEN", ""
             ).strip(),
         }
+        # Validate all required settings together so startup reports every
+        # missing value without ever printing a secret value.
         missing = [name for name, value in required.items() if not value]
         if missing:
             names = ", ".join(missing)
