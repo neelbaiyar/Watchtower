@@ -69,9 +69,16 @@ class FakeSnapshotService:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
         self.requested_tickers: list[str] = []
+        self.force_refresh_values: list[bool] = []
 
-    def get_company_snapshot(self, ticker: str) -> CompanySnapshotResponse:
+    def get_company_snapshot(
+        self,
+        ticker: str,
+        *,
+        force_refresh: bool = False,
+    ) -> CompanySnapshotResponse:
         self.requested_tickers.append(ticker)
+        self.force_refresh_values.append(force_refresh)
         if self.error is not None:
             raise self.error
         return snapshot_response()
@@ -87,10 +94,12 @@ def test_snapshot_route_returns_owned_response() -> None:
 
     assert response.status_code == 200
     assert service.requested_tickers == ["HPE"]
+    assert service.force_refresh_values == [False]
     payload = response.json()
     assert payload["ticker"] == "HPE"
     assert payload["price"]["data"]["latest_close"] == 63.73
     assert payload["research_signal"]["level"] == "quiet"
+    assert payload["snapshot_status"] == "live"
     assert payload["generated_at"] == "2026-09-25T16:00:00Z"
 
 
@@ -130,6 +139,17 @@ def test_malformed_ticker_is_rejected_before_service_call() -> None:
 
     assert response.status_code == 422
     assert service.requested_tickers == []
+
+
+def test_refresh_query_requests_live_provider_data() -> None:
+    service = FakeSnapshotService()
+
+    with TestClient(create_app(snapshot_service=service)) as client:
+        response = client.get("/companies/HPE/snapshot?refresh=true")
+
+    assert response.status_code == 200
+    assert service.requested_tickers == ["HPE"]
+    assert service.force_refresh_values == [True]
 
 
 @pytest.mark.parametrize(

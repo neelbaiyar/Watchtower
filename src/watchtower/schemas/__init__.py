@@ -14,6 +14,7 @@ from watchtower.schemas.company_snapshot import (
     ResearchPriority,
     ResearchSignalResponse,
     SignalEvidenceResponse,
+    SnapshotStatus,
     SourceMetadata,
 )
 
@@ -28,5 +29,6 @@ __all__ = [
     "ResearchPriority",
     "ResearchSignalResponse",
     "SignalEvidenceResponse",
+    "SnapshotStatus",
     "SourceMetadata",
 ]

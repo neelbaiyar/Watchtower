@@ -1,0 +1,48 @@
+# ADR 0003: Persist complete public snapshots in local PostgreSQL
+
+## Status
+
+Accepted.
+
+## Context
+
+The local dashboard originally made live SEC, price, and news requests for
+every selection. That made the experience slow, repeatedly spent the limited
+news budget, and could not show prior research when a provider was unavailable
+or the application restarted.
+
+The Go poller already uses local PostgreSQL to persist normalized SEC filing
+history. Watchtower needs a durable cache that both the Python application and
+future refresh work can use without sharing raw vendor payloads.
+
+## Decision
+
+Store a complete, validated `CompanySnapshotResponse` as JSONB in PostgreSQL,
+keyed by normalized ticker and paired with `generated_at` and `cached_at`
+timestamps.
+
+- A fresh entry is returned as `cached` without making provider calls.
+- A browser or API caller can use `refresh=true` to force a live provider
+  refresh.
+- A provider failure returns the last stored response as `stale` when available.
+- A live response remains usable if the optional cache cannot be written.
+- The cache is enabled only when `WATCHTOWER_SNAPSHOT_DATABASE_URL` is set.
+
+The public response declares `snapshot_status` as `live`, `cached`, or
+`stale`. A cached response therefore cannot be mistaken for a current live
+response.
+
+## Alternatives considered
+
+- **In-memory cache:** simpler, but lost all data on restart and could not
+  share state with the poller.
+- **Cache raw provider responses:** would couple application behavior to vendor
+  schemas and persist more data than Watchtower needs.
+- **Always live requests:** preserves freshness but repeats costly work and has
+  no fallback during provider failures.
+
+## Consequences
+
+PostgreSQL/Docker becomes an opt-in requirement for durable dashboard behavior.
+The live-only API remains available without it. A later refresh worker can
+consume the Go poller's SEC refresh requests and replace stale snapshots.

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Watchtower source-grounded research-priority dashboard"
+    />
+    <title>Watchtower | Research Priority</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script defer src="/assets/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#research-panel">Skip to research panel</a>
+    <header class="site-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">W</span>
+        <div>
+          <p class="eyebrow">LOCAL RESEARCH DESK</p>
+          <h1>Watchtower</h1>
+        </div>
+      </div>
+      <p class="header-note">Source-grounded research priority, not investment advice.</p>
+    </header>
+
+    <main class="dashboard-shell">
+      <aside class="watchlist-panel" aria-labelledby="watchlist-heading">
+        <div>
+          <p class="eyebrow">YOUR WATCHLIST</p>
+          <h2 id="watchlist-heading">Companies to review</h2>
+          <p class="muted">
+            Add a ticker to keep it in this browser. Watchtower never stores it on a server.
+          </p>
+        </div>
+
+        <form id="watchlist-form" class="ticker-form" novalidate>
+          <label for="ticker-input">Ticker symbol</label>
+          <div class="ticker-input-row">
+            <input
+              id="ticker-input"
+              name="ticker"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              maxlength="10"
+              placeholder="AAPL"
+              aria-describedby="ticker-help"
+              required
+            />
+            <button type="submit">Add</button>
+          </div>
+          <p id="ticker-help" class="field-help">Letters, numbers, dots, and hyphens only.</p>
+          <p id="ticker-error" class="field-error" role="alert" hidden></p>
+        </form>
+
+        <ul id="watchlist" class="watchlist" aria-label="Saved ticker watchlist"></ul>
+        <p id="watchlist-empty" class="empty-watchlist">
+          Your watchlist is empty. Add a ticker to begin.
+        </p>
+      </aside>
+
+      <section id="research-panel" class="research-panel" aria-live="polite">
+        <div id="empty-state" class="state-card">
+          <p class="eyebrow">READY WHEN YOU ARE</p>
+          <h2>Select a company to inspect its evidence.</h2>
+          <p>
+            Watchtower will retrieve filings, price context, headlines, and a transparent
+            research-priority signal.
+          </p>
+        </div>
+
+        <div id="loading-state" class="state-card" hidden>
+          <span class="loading-dot" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow">RETRIEVING SOURCES</p>
+            <h2 id="loading-title">Building a company snapshot</h2>
+            <p>Checking normalized provider data and calculating research priority.</p>
+          </div>
+        </div>
+
+        <div id="error-state" class="state-card state-error" role="alert" hidden>
+          <p class="eyebrow">SNAPSHOT UNAVAILABLE</p>
+          <h2 id="error-title">Watchtower could not load this company.</h2>
+          <p id="error-detail"></p>
+          <button id="retry-button" type="button">Try again</button>
+        </div>
+
+        <article id="snapshot" hidden>
+          <header class="company-header">
+            <div>
+              <p id="company-ticker" class="eyebrow"></p>
+              <h2 id="company-name"></h2>
+              <p id="company-cik" class="muted"></p>
+              <p id="snapshot-status" class="snapshot-status"></p>
+            </div>
+            <button id="refresh-button" class="secondary-button" type="button">
+              Refresh sources
+            </button>
+          </header>
+
+          <section class="signal-card" aria-labelledby="signal-heading">
+            <div class="signal-score-wrap">
+              <span id="signal-score" class="signal-score"></span>
+              <span class="signal-score-label">attention score</span>
+            </div>
+            <div>
+              <p id="signal-level" class="signal-level"></p>
+              <h3 id="signal-heading">Research priority</h3>
+              <p id="signal-explanation"></p>
+              <p id="signal-limitation" class="signal-limitation"></p>
+            </div>
+          </section>
+
+          <div class="content-grid">
+            <section class="content-card" aria-labelledby="evidence-heading">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">WHY THIS LEVEL</p>
+                  <h3 id="evidence-heading">Signal evidence</h3>
+                </div>
+              </div>
+              <ul id="signal-evidence" class="evidence-list"></ul>
+            </section>
+
+            <section class="content-card" aria-labelledby="price-heading">
+              <p class="eyebrow">MARKET CONTEXT</p>
+              <h3 id="price-heading">Daily price</h3>
+              <dl class="price-grid">
+                <div><dt>Latest close</dt><dd id="latest-close"></dd></div>
+                <div><dt>Daily change</dt><dd id="daily-change"></dd></div>
+                <div><dt>Trading date</dt><dd id="price-date"></dd></div>
+                <div><dt>Retrieved</dt><dd id="price-retrieved"></dd></div>
+              </dl>
+            </section>
+          </div>
+
+          <div class="content-grid lower-grid">
+            <section class="content-card" aria-labelledby="filings-heading">
+              <p class="eyebrow">SEC EDGAR</p>
+              <h3 id="filings-heading">Recent 8-K filings</h3>
+              <p id="filings-retrieved" class="source-time"></p>
+              <ul id="filings" class="source-list"></ul>
+            </section>
+
+            <section class="content-card" aria-labelledby="news-heading">
+              <p class="eyebrow">HEADLINE CONTEXT</p>
+              <h3 id="news-heading">Associated headlines</h3>
+              <p id="news-retrieved" class="source-time"></p>
+              <ul id="news" class="source-list"></ul>
+            </section>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

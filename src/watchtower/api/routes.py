@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 
 from watchtower.schemas import CompanySnapshotResponse
 from watchtower.services import CompanySnapshotService
@@ -47,9 +47,17 @@ def get_company_snapshot(
         ),
     ],
     service: Annotated[CompanySnapshotService, Depends(get_snapshot_service)],
+    refresh: Annotated[
+        bool,
+        Query(
+            description=(
+                "Bypass a fresh local snapshot cache and request current provider data."
+            )
+        ),
+    ] = False,
 ) -> CompanySnapshotResponse:
     """Compose current Watchtower data for one ticker."""
 
     # This stays intentionally thin: HTTP concerns end here and the service
     # owns the provider-call order plus response composition.
-    return service.get_company_snapshot(ticker)
+    return service.get_company_snapshot(ticker, force_refresh=refresh)

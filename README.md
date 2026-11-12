@@ -5,11 +5,12 @@ it combines recent SEC 8-K filings, a daily market-price snapshot, and current
 headline metadata into one Watchtower-owned JSON response with a transparent
 research-priority signal.
 
-This repository contains a complete FastAPI research-snapshot slice and a
-local-only Go foundation for durable SEC 8-K ingestion. It is a research tool,
-not an investment recommendation or automated trading system.
+This repository contains a complete FastAPI research dashboard with a durable
+local snapshot cache and a local-only Go foundation for SEC 8-K ingestion. It
+is a research tool, not an investment recommendation or automated trading
+system.
 
-## What the demo proves
+## What Watchtower provides
 
 - Ticker is runtime input; `AAPL`, `NVDA`, and other supported tickers are
   not hardcoded.
@@ -20,6 +21,10 @@ not an investment recommendation or automated trading system.
 - Provider failures become controlled HTTP responses instead of leaked payloads.
 - A deterministic, source-linked research-attention signal makes evidence
   visible without claiming to predict price direction.
+- A local browser dashboard keeps a small ticker watchlist on the current
+  device and presents the signal, source links, and retrieval times clearly.
+- Optional local PostgreSQL storage survives application restarts and returns
+  an explicitly marked stale snapshot if a live provider is unavailable.
 - Secrets and personal contact configuration remain outside Git.
 
 ## Architecture
@@ -41,6 +46,11 @@ CompanySnapshotResponse
 Provider clients return Watchtower-owned internal records. The service maps
 those records into public Pydantic response models; the route never processes
 raw vendor JSON.
+
+When the optional local cache is enabled, the service first checks a fresh
+Watchtower-owned snapshot in PostgreSQL. A manual refresh bypasses that cache;
+provider responses still travel through the same clients and service before a
+replacement snapshot is stored.
 
 ## Explainable research-priority signal
 
@@ -112,6 +122,33 @@ Verify the local file is ignored without displaying its contents:
 git check-ignore -v .env
 ```
 
+## Optional durable local cache
+
+The dashboard works without Docker through live requests. To retain complete
+Watchtower snapshots across restarts and use a stored fallback when an upstream
+provider is unavailable, enable the local PostgreSQL cache.
+
+1. Add `WATCHTOWER_SNAPSHOT_DATABASE_URL` to the ignored root `.env` using the
+   same local database password as `infra/postgres/.env`.
+2. Start PostgreSQL:
+
+   ```bash
+   docker compose up -d --wait
+   ```
+
+3. A new database runs every migration automatically. If your database volume
+   already exists, apply the snapshot-table migration once:
+
+   ```bash
+   docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+     < infra/postgres/migrations/003_create_company_snapshots.sql
+   ```
+
+With the default five-minute TTL, a selected ticker shows a `cached` snapshot
+until it expires. **Refresh sources** makes a live request immediately. If that
+live request fails and a prior snapshot exists, the dashboard shows it as
+`stale`, including its original generation time.
+
 ## Run Watchtower
 
 Start the application:
@@ -120,19 +157,27 @@ Start the application:
 uv run --env-file .env uvicorn watchtower.main:app --host 127.0.0.1 --port 8000
 ```
 
-Leave that terminal running. Open the interactive documentation:
+Leave that terminal running. Open the local research dashboard:
+
+<http://127.0.0.1:8000/>
+
+Add a ticker such as `AAPL` or `NVDA`, then select it from the watchlist.
+The watchlist stays only in that browser's local storage; it is not sent to or
+stored by Watchtower. Watchtower restores the last selected saved ticker at
+startup. Without the optional cache, selecting a ticker makes one live snapshot
+request, so avoid repeatedly refreshing it when conserving the Marketaux request
+budget.
+When the optional durable cache is configured, selecting a recently cached
+ticker avoids another provider request; use **Refresh sources** for a live
+update.
+
+For developer-facing interactive API documentation, open:
 
 <http://127.0.0.1:8000/docs>
 
 Under **Company snapshots**, open **GET /companies/{ticker}/snapshot**, select
-**Try it out**, enter a ticker, and select **Execute**.
-
-Suggested demo sequence:
-
-1. Query `AAPL` or `NVDA` to demonstrate general ticker input.
-2. Query a second supported ticker of your choice.
-3. Point out each provider name and retrieval timestamp in the response.
-4. Open a returned SEC filing or news URL to demonstrate provenance.
+**Try it out**, enter a ticker, and select **Execute** to inspect the raw
+Watchtower-owned JSON contract.
 
 You can also query the API from another terminal:
 
@@ -171,6 +216,9 @@ company identifier; it is not a ticker.
 ```text
 WATCHTOWER_POLLER_DATABASE_URL="postgres://watchtower:your-local-password@127.0.0.1:5432/watchtower?sslmode=disable"
 WATCHTOWER_POLLER_CIKS="your-ten-digit-cik,your-second-ten-digit-cik"
+# Optional: point the Python dashboard/API cache at the same local database.
+WATCHTOWER_SNAPSHOT_DATABASE_URL="postgres://watchtower:your-local-password@127.0.0.1:5432/watchtower?sslmode=disable"
+WATCHTOWER_SNAPSHOT_CACHE_TTL_SECONDS="300"
 ```
 
 Then run one bounded pass:
@@ -192,6 +240,8 @@ The response contains:
 
 - `ticker`, `company_name`, and zero-padded SEC `cik` identity fields.
 - `generated_at`, when Watchtower finished assembling the response.
+- `snapshot_status`, which is `live`, `cached`, or `stale` so freshness is
+  always explicit.
 - `filings`, containing SEC source metadata and recent 8-K records.
 - `price`, containing its source metadata and latest daily-close information.
 - `news`, containing Marketaux retrieval metadata and article metadata.
@@ -210,8 +260,9 @@ contain an event that happened earlier.
 - `502`: an upstream provider request failed or returned unusable data.
 - `503`: the news provider rejected configuration or reached its rate limit.
 
-The current demo is intentionally all-or-nothing: if a required provider fails,
-Watchtower returns a controlled error instead of a partial snapshot.
+Without a stored snapshot, a required provider failure returns a controlled
+error instead of a partial snapshot. With the optional cache enabled,
+Watchtower returns the last complete validated snapshot as `stale` instead.
 
 ## Quality checks
 
@@ -231,14 +282,14 @@ uv run pytest -q
   about that company.
 - yfinance is an unofficial Yahoo Finance wrapper and can throttle or change.
 - Marketaux's free plan is rate-limited.
-- The FastAPI snapshot endpoint performs live provider calls and has no cache.
+- PostgreSQL snapshot caching is optional; without its ignored local URL and a
+  running Docker database, the FastAPI endpoint remains live-only.
 - The Go poller has an explicit one-shot mode, but no recurring scheduler.
 - The public signal is a transparent baseline, not a trained ML model, sentiment
   classifier, ranking system, knowledge graph, or consequence engine.
 - No private scoring logic, model weights, labeled dataset, or proprietary
   heuristic is present in this repository.
 
-Recurring polling, cache-backed reads, and consumption of EDGAR-triggered
-refresh requests are future work. Proprietary scoring or model logic will
-remain outside this public repository and behind a typed boundary when that
-milestone arrives.
+Recurring polling and consumption of EDGAR-triggered refresh requests remain
+future work. Proprietary scoring or model logic will remain outside this public
+repository and behind a typed boundary when that milestone arrives.

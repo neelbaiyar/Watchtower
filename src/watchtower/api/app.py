@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
+from pathlib import Path
 
 from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from watchtower.api.routes import router
 from watchtower.clients.marketaux import (
@@ -24,6 +27,11 @@ from watchtower.clients.yfinance import PriceClientError, YFinanceClient
 from watchtower.config import Settings
 from watchtower.services import CompanySnapshotService
 from watchtower.signals import TransparentResearchSignalEngine
+from watchtower.storage import PostgresSnapshotStore, SnapshotStoreError
+
+# Static assets live next to application code so `uvicorn watchtower.main:app`
+# serves the dashboard consistently in local development and a container.
+WEB_DIRECTORY = Path(__file__).resolve().parents[1] / "web"
 
 
 def create_app(
@@ -45,6 +53,16 @@ def create_app(
         # Production creates provider clients once at startup, not once per
         # request. The context managers close their HTTP connections on exit.
         active_settings = settings or Settings.from_environment()
+        snapshot_store: PostgresSnapshotStore | None = None
+        if active_settings.snapshot_database_url is not None:
+            try:
+                snapshot_store = PostgresSnapshotStore.connect(
+                    active_settings.snapshot_database_url
+                )
+            except SnapshotStoreError as error:
+                raise RuntimeError(
+                    "Watchtower snapshot cache is configured but unavailable"
+                ) from error
         with (
             SecEdgarClient(user_agent=active_settings.sec_user_agent) as sec_client,
             MarketauxClient(
@@ -58,8 +76,16 @@ def create_app(
                 price_client=YFinanceClient(),
                 news_client=news_client,
                 signal_engine=TransparentResearchSignalEngine(),
+                snapshot_store=snapshot_store,
+                snapshot_cache_ttl=timedelta(
+                    seconds=active_settings.snapshot_cache_ttl_seconds
+                ),
             )
-            yield
+            try:
+                yield
+            finally:
+                if snapshot_store is not None:
+                    snapshot_store.close()
 
     app = FastAPI(
         title="Watchtower API",
@@ -82,6 +108,16 @@ def create_app(
         ],
         swagger_ui_parameters={"docExpansion": "full"},
     )
+    # The dashboard is a presentation layer only. Its browser JavaScript calls
+    # the same documented API route rather than duplicating provider logic.
+    app.mount("/assets", StaticFiles(directory=WEB_DIRECTORY), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def get_dashboard() -> FileResponse:
+        """Serve the local Watchtower interface instead of developer docs."""
+
+        return FileResponse(WEB_DIRECTORY / "index.html")
+
     # Route declarations and provider-error translation are registered after
     # the application object exists, keeping the factory easy to test.
     app.include_router(router)

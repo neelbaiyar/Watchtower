@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from watchtower.clients.marketaux import NewsHeadline
-from watchtower.clients.sec_edgar import SecCompany, SecFiling
-from watchtower.clients.yfinance import DailyPriceSnapshot
+from watchtower.clients.marketaux import NewsClientError, NewsHeadline
+from watchtower.clients.sec_edgar import (
+    SecCompany,
+    SecEdgarError,
+    SecFiling,
+    SecTickerNotFoundError,
+)
+from watchtower.clients.yfinance import DailyPriceSnapshot, PriceClientError
 from watchtower.schemas.company_snapshot import (
     CompanySnapshotResponse,
     DailyPriceResponse,
@@ -17,9 +22,11 @@ from watchtower.schemas.company_snapshot import (
     HeadlineResponse,
     NewsSectionResponse,
     PriceSectionResponse,
+    SnapshotStatus,
     SourceMetadata,
 )
 from watchtower.signals.contracts import ResearchSignalEngine, ResearchSignalInput
+from watchtower.storage import CachedSnapshot, SnapshotStore, SnapshotStoreError
 
 
 class SecClient(Protocol):
@@ -59,6 +66,8 @@ class CompanySnapshotService:
         price_client: PriceClient,
         news_client: NewsClient,
         signal_engine: ResearchSignalEngine,
+        snapshot_store: SnapshotStore | None = None,
+        snapshot_cache_ttl: timedelta | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         # Dependencies enter at construction time instead of being created in
@@ -72,9 +81,42 @@ class CompanySnapshotService:
         self._signal_engine = signal_engine
         # A controllable clock makes retrieval timestamps deterministic in tests.
         self._clock = clock or (lambda: datetime.now(UTC))
+        # Storage is optional: local live-only development remains useful, but
+        # a configured PostgreSQL store makes a successful snapshot durable.
+        self._snapshot_store = snapshot_store
+        self._snapshot_cache_ttl = snapshot_cache_ttl or timedelta(minutes=5)
+        if self._snapshot_cache_ttl <= timedelta():
+            raise ValueError("snapshot cache TTL must be greater than zero")
 
-    def get_company_snapshot(self, ticker: str) -> CompanySnapshotResponse:
-        """Build a company snapshot from normalized provider records."""
+    def get_company_snapshot(
+        self,
+        ticker: str,
+        *,
+        force_refresh: bool = False,
+    ) -> CompanySnapshotResponse:
+        """Return a fresh cache entry, live data, or an explicit stale fallback."""
+
+        normalized_ticker = ticker.strip().upper()
+        cached = self._load_cached_snapshot(normalized_ticker)
+        if cached is not None and not force_refresh and self._is_fresh(cached):
+            return self._with_snapshot_status(cached.snapshot, SnapshotStatus.CACHED)
+
+        try:
+            snapshot = self._build_live_snapshot(ticker)
+        # A definitive SEC "not found" result should remain a 404 rather than
+        # silently returning an old entry for a symbol that no longer resolves.
+        except SecTickerNotFoundError:
+            raise
+        except SecEdgarError, PriceClientError, NewsClientError:
+            if cached is not None:
+                return self._with_snapshot_status(cached.snapshot, SnapshotStatus.STALE)
+            raise
+
+        self._save_snapshot(snapshot)
+        return snapshot
+
+    def _build_live_snapshot(self, ticker: str) -> CompanySnapshotResponse:
+        """Build a live company snapshot from normalized provider records."""
 
         # SEC resolution happens first. A nonexistent ticker fails before we
         # spend a limited news-provider request.
@@ -140,6 +182,43 @@ class CompanySnapshotService:
             ),
             research_signal=research_signal,
         )
+
+    def _load_cached_snapshot(self, ticker: str) -> CachedSnapshot | None:
+        """Treat an unavailable optional cache as a cache miss, not an API outage."""
+
+        if self._snapshot_store is None:
+            return None
+        try:
+            return self._snapshot_store.load(ticker)
+        except SnapshotStoreError:
+            # Live provider calls remain the source of truth when local storage
+            # is temporarily unavailable. The caller receives a provider error
+            # only if there is neither live data nor a usable stored snapshot.
+            return None
+
+    def _save_snapshot(self, snapshot: CompanySnapshotResponse) -> None:
+        """Persist a live response without turning a storage hiccup into failure."""
+
+        if self._snapshot_store is None:
+            return
+        try:
+            self._snapshot_store.save(snapshot)
+        except SnapshotStoreError:
+            # The live result is still truthful and useful even if persistence
+            # fails. A later successful live request can repair the cache.
+            return
+
+    def _is_fresh(self, cached: CachedSnapshot) -> bool:
+        return self._now() - cached.cached_at <= self._snapshot_cache_ttl
+
+    @staticmethod
+    def _with_snapshot_status(
+        snapshot: CompanySnapshotResponse,
+        status: SnapshotStatus,
+    ) -> CompanySnapshotResponse:
+        # Pydantic models are frozen, so model_copy is the intentional way to
+        # derive a response that states whether its source is cache or live.
+        return snapshot.model_copy(update={"snapshot_status": status})
 
     def _now(self) -> datetime:
         value = self._clock()

@@ -106,6 +106,7 @@ def test_company_snapshot_serializes_as_owned_json() -> None:
     assert payload["news"]["items"][0]["publisher"] == "Example News"
     assert payload["news"]["items"][0]["url"] == "https://example.com/hpe-high"
     assert payload["research_signal"]["level"] == "monitor"
+    assert payload["snapshot_status"] == "live"
 
 
 def test_timestamps_must_include_a_timezone() -> None:

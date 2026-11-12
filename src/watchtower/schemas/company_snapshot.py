@@ -92,6 +92,14 @@ class ResearchPriority(StrEnum):
     HIGH_ATTENTION = "high_attention"
 
 
+class SnapshotStatus(StrEnum):
+    """Whether a snapshot came from live sources or durable local storage."""
+
+    LIVE = "live"
+    CACHED = "cached"
+    STALE = "stale"
+
+
 class SignalEvidenceResponse(WatchtowerResponseModel):
     """One observable source fact contributing to a research-priority signal."""
 
@@ -121,6 +129,9 @@ class CompanySnapshotResponse(WatchtowerResponseModel):
     company_name: str = Field(min_length=1)
     cik: str = Field(pattern=r"^\d{10}$")
     generated_at: AwareDatetime
+    # `generated_at` is the user-visible as-of time. `snapshot_status` makes
+    # a cached fallback explicit instead of presenting old data as live.
+    snapshot_status: SnapshotStatus = SnapshotStatus.LIVE
     filings: FilingsSectionResponse
     price: PriceSectionResponse
     news: NewsSectionResponse

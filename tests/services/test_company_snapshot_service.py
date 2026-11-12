@@ -6,13 +6,14 @@ import pytest
 
 from watchtower.clients.marketaux import NewsHeadline
 from watchtower.clients.sec_edgar import SecCompany, SecFiling
-from watchtower.clients.yfinance import DailyPriceSnapshot
+from watchtower.clients.yfinance import DailyPriceSnapshot, PriceRequestError
 from watchtower.schemas import ResearchSignalResponse
 from watchtower.services.company_snapshot import CompanySnapshotService
 from watchtower.signals import (
     ResearchSignalInput,
     TransparentResearchSignalEngine,
 )
+from watchtower.storage import CachedSnapshot
 
 
 class FakeSecClient:
@@ -144,6 +145,31 @@ class SequenceClock:
         return current
 
 
+class FakeSnapshotStore:
+    """Small in-memory store used to prove service cache policy without SQL."""
+
+    def __init__(self, cached: CachedSnapshot | None = None) -> None:
+        self.cached = cached
+        self.loaded_tickers: list[str] = []
+        self.saved_snapshots: list[object] = []
+
+    def load(self, ticker: str) -> CachedSnapshot | None:
+        self.loaded_tickers.append(ticker)
+        return self.cached
+
+    def save(self, snapshot: object) -> None:
+        self.saved_snapshots.append(snapshot)
+
+
+class FailingPriceClient:
+    """Simulates a transient provider failure after the SEC lookup succeeds."""
+
+    PROVIDER_NAME = "Yahoo Finance via yfinance"
+
+    def get_daily_price(self, ticker: str) -> DailyPriceSnapshot:
+        raise PriceRequestError(f"price provider unavailable for {ticker}")
+
+
 def build_service(
     *,
     clock: SequenceClock | None = None,
@@ -246,3 +272,76 @@ def test_service_can_use_the_public_transparent_signal_baseline() -> None:
         "headline_activity",
         "price_movement",
     ]
+
+
+def test_service_persists_a_successful_live_snapshot() -> None:
+    store = FakeSnapshotStore()
+    sec_client = FakeSecClient()
+    service = CompanySnapshotService(
+        sec_client=sec_client,
+        price_client=FakePriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=store,
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    snapshot = service.get_company_snapshot("HPE")
+
+    assert snapshot.snapshot_status == "live"
+    assert store.loaded_tickers == ["HPE"]
+    assert store.saved_snapshots == [snapshot]
+
+
+def test_service_uses_fresh_cached_snapshot_without_calling_providers() -> None:
+    live_service, _, _, _, _ = build_service(
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC))
+    )
+    cached_snapshot = live_service.get_company_snapshot("HPE")
+    store = FakeSnapshotStore(
+        CachedSnapshot(
+            snapshot=cached_snapshot,
+            cached_at=datetime(2026, 9, 25, 16, 1, tzinfo=UTC),
+        )
+    )
+    sec_client = FakeSecClient()
+    service = CompanySnapshotService(
+        sec_client=sec_client,
+        price_client=FailingPriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=store,
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 2, tzinfo=UTC)),
+    )
+
+    snapshot = service.get_company_snapshot("HPE")
+
+    assert snapshot.snapshot_status == "cached"
+    assert sec_client.requested_tickers == []
+
+
+def test_service_returns_stale_snapshot_after_forced_refresh_provider_failure() -> None:
+    live_service, _, _, _, _ = build_service(
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC))
+    )
+    cached_snapshot = live_service.get_company_snapshot("HPE")
+    store = FakeSnapshotStore(
+        CachedSnapshot(
+            snapshot=cached_snapshot,
+            cached_at=datetime(2026, 9, 25, 15, 0, tzinfo=UTC),
+        )
+    )
+    sec_client = FakeSecClient()
+    service = CompanySnapshotService(
+        sec_client=sec_client,
+        price_client=FailingPriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=store,
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    snapshot = service.get_company_snapshot("HPE", force_refresh=True)
+
+    assert snapshot.snapshot_status == "stale"
+    assert sec_client.requested_tickers == ["HPE", "HPE"]

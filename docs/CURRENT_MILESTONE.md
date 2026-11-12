@@ -3,111 +3,100 @@
 This file is the scope boundary for active work. Update it when evidence
 changes, not whenever a new idea appears.
 
-## Milestone 9: Explainable Research-Priority Signal
+## Milestone 11: Durable Local Snapshot Cache
 
 **Status:** Complete — ready for review
 
 ### Goal
 
-Turn a Watchtower company snapshot into a transparent five-level research
-priority signal. The signal tells a user which companies deserve deeper
-research now; it does not predict price direction or recommend buying, selling,
-or holding a security.
+Make Watchtower's complete, normalized company snapshots durable across local
+application restarts. A recent stored snapshot should reduce repeated provider
+calls, and a prior complete snapshot should remain available when a provider is
+temporarily unavailable.
 
 ### User and System Value
 
-The existing snapshot collects evidence but leaves prioritization entirely to
-the user. A deterministic signal makes that prioritization visible and
-repeatable while preserving every source link needed to inspect its reasoning.
+A browser-local watchlist remembers which tickers matter to the user, but it
+does not preserve research data. A durable cache makes the dashboard faster,
+protects the limited news request budget, and provides an honest stale fallback
+instead of a dead end during a transient provider outage.
 
 ### Concepts
 
-- A deterministic baseline produces the same output for the same input.
-- An ordinal signal places an item into an ordered category without claiming a
-  probability or prediction.
-- Evidence is the source-linked fact contributing to a derived result.
-- A typed interface separates callers from a particular engine implementation.
-- A pure function can be tested without HTTP, databases, clocks, or providers.
-
-### Architecture Boundary
-
-```text
-Watchtower-owned snapshot evidence
-    -> ResearchSignalEngine contract
-    -> TransparentResearchSignalEngine baseline
-    -> level, numeric attention score, evidence, deterministic explanation
-    -> public Watchtower response
-```
-
-The engine receives normalized Watchtower records, never raw vendor JSON. Its
-public baseline stays in this repository. A later private or trained engine may
-implement the same contract without changing API callers.
-
-### Options Considered
-
-1. **LLM-generated interpretation:** flexible but non-deterministic, requires
-   prompt/version/evaluation work, and is unnecessary for this first signal.
-2. **Trained price-prediction model:** potentially appropriate for a later ML
-   milestone, but requires labels, point-in-time data, backtesting, and a
-   rigorous evaluation plan.
-3. **Transparent rule baseline:** selected. It is reproducible, source-linked,
-   safe to describe, and establishes the interface that later models must beat.
+- A cache stores reusable results; its time-to-live controls freshness.
+- A cache fallback is resilient only when it marks stored data as non-live.
+- JSONB stores validated Watchtower-owned JSON without coupling storage to raw
+  provider payloads.
+- `refresh=true` is an explicit request for a live refresh rather than an
+  accidental background call.
 
 ### Selected Design
 
-Calculate a bounded 0–100 **research-attention score** from observable facts:
-recent 8-K activity, headline count, and the magnitude—not direction—of the
-latest daily price movement. Map that score to five attention levels and return
-the contributing evidence plus a deterministic explanation.
+Use the existing local PostgreSQL instance, enabled only by
+`WATCHTOWER_SNAPSHOT_DATABASE_URL`. Store a full validated
+`CompanySnapshotResponse` per ticker. A fresh entry returns `cached`; a live
+provider failure returns the last complete entry as `stale`; a normal success
+returns `live` and replaces the cache.
 
-The score is an operational prioritization aid. Positive and negative price
-moves can both increase attention because either may justify research.
+The FastAPI route remains thin. The service owns cache policy and a storage
+adapter owns SQL. No raw provider payload, credential, or proprietary logic is
+stored.
 
 ### Files
 
-- `docs/adr/0002-explainable-research-priority-baseline.md`
-- `src/watchtower/signals/contracts.py`
-- `src/watchtower/signals/transparent.py`
-- `src/watchtower/schemas/company_snapshot.py`
+- `infra/postgres/migrations/003_create_company_snapshots.sql`
+- `src/watchtower/storage/snapshots.py`
 - `src/watchtower/services/company_snapshot.py`
-- `tests/signals/test_transparent.py`
+- `src/watchtower/api/app.py`
+- `src/watchtower/api/routes.py`
+- `src/watchtower/schemas/company_snapshot.py`
+- `src/watchtower/web/`
+- `tests/storage/test_postgres_snapshots.py`
 - `tests/services/test_company_snapshot_service.py`
-- `tests/schemas/test_company_snapshot.py`
-- `docs/CURRENT_MILESTONE.md`
+- `docs/adr/0003-durable-local-snapshot-cache.md`
 - `README.md`
 
 ### Build Order
 
-- [x] Define the public signal and evidence schemas plus the engine contract.
-- [x] Implement and unit-test the pure transparent baseline.
-- [x] Compose the signal into the existing snapshot service.
-- [x] Verify the API response exposes source-linked evidence and an honest
-      limitation statement.
-- [x] Document the signal inputs, weights, limitations, and local run path.
-- [x] Run Go and Python quality checks plus a staged secret scan.
+- [x] Define public `live`, `cached`, and `stale` snapshot status.
+- [x] Add a versioned PostgreSQL table for complete owned snapshots.
+- [x] Implement cache read, write, freshness, forced refresh, and stale
+      fallback behavior behind a narrow storage contract.
+- [x] Show status and original generation time in the dashboard.
+- [x] Add unit tests for cache policy and an opt-in PostgreSQL round-trip test.
+- [x] Restore the last selected browser-local ticker at startup and show its
+      explicit snapshot status plus last-refresh time.
+- [x] Run complete Python and Go quality checks, manually inspect the local
+      dashboard, and perform a staged secret scan.
 
-### Smallest Unfinished Piece
+### Completion Evidence
 
-Define a stable, source-linked signal contract and test its five-level boundary
-behavior before integrating it into the live FastAPI response.
+- Python formatting and lint pass; 52 tests pass and the opt-in PostgreSQL
+  integration test passes when run against the local Docker database.
+- Go poller tests and static analysis pass.
+- The local dashboard was manually inspected for readable empty and saved
+  watchlist startup states.
+- The staged public diff passed credential, key-file, and whitespace checks.
 
 ### Acceptance Criteria
 
-- [x] The public response names five research-priority levels without using
-      buy, sell, hold, bullish, bearish, or prediction language.
-- [x] The same normalized evidence produces the same score, level, evidence,
-      and explanation.
-- [x] Every evidence item identifies its source and links to an underlying
-      filing or article when one exists.
-- [x] The baseline uses no LLM, model weights, private dataset, or live call.
-- [x] The service depends on a typed signal-engine contract, not directly on
-      the transparent implementation.
-- [x] Unit, service, schema, API, lint, format, and secret checks pass.
+- [x] A successful complete snapshot is stored under its normalized ticker.
+- [x] A fresh entry avoids external provider calls and is labeled `cached`.
+- [x] `refresh=true` bypasses a fresh entry and requests current provider data.
+- [x] A live provider failure returns the last complete stored response as
+      `stale`; an uncached ticker still gets a controlled provider error.
+- [x] Stored snapshots survive a Python process boundary in local PostgreSQL.
+- [x] The dashboard presents live, cached, and stale status clearly alongside
+      the original generation time.
+- [x] Tests, formatting, linting, a real local database integration check, and
+      a staged secret scan pass.
 
 ### Explicitly Out of Scope
 
-- Price-direction, return, or investment recommendations.
-- LLM summaries, sentiment inference, embeddings, or a trained ML model.
-- Historical labels, backtesting, model validation, or evaluation datasets.
-- Scheduled polling, database watchlists, cache-backed reads, or the local UI.
-- A private engine implementation or any proprietary logic in this repository.
+- A recurring poller schedule, server-managed watchlist, or refresh-worker
+  consumption of SEC outbox requests.
+- User accounts, deployment, shared watchlists, or public hosting.
+- An LLM, trained prediction model, investment recommendation, or trading
+  behavior.
+- Any private consequence-engine implementation, model weights, evaluation
+  data, or proprietary feature engineering.
