@@ -74,8 +74,8 @@ stored.
 - Python formatting and lint pass; 52 tests pass and the opt-in PostgreSQL
   integration test passes when run against the local Docker database.
 - Go poller tests and static analysis pass.
-- The local dashboard was manually inspected for readable empty and saved
-  watchlist startup states.
+- The local dashboard was manually inspected for its readable neutral startup
+  state; server tests verify delivery of the saved-watchlist startup code.
 - The staged public diff passed credential, key-file, and whitespace checks.
 
 ### Acceptance Criteria
