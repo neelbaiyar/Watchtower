@@ -19,6 +19,7 @@ from watchtower.schemas.company_snapshot import (
     PriceSectionResponse,
     SourceMetadata,
 )
+from watchtower.signals.contracts import ResearchSignalEngine, ResearchSignalInput
 
 
 class SecClient(Protocol):
@@ -57,6 +58,7 @@ class CompanySnapshotService:
         sec_client: SecClient,
         price_client: PriceClient,
         news_client: NewsClient,
+        signal_engine: ResearchSignalEngine,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         # Dependencies enter at construction time instead of being created in
@@ -64,6 +66,10 @@ class CompanySnapshotService:
         self._sec_client = sec_client
         self._price_client = price_client
         self._news_client = news_client
+        # The service depends on the contract, not the public baseline class.
+        # A future implementation can therefore be injected without changing
+        # this orchestration code or the HTTP route.
+        self._signal_engine = signal_engine
         # A controllable clock makes retrieval timestamps deterministic in tests.
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -83,6 +89,19 @@ class CompanySnapshotService:
 
         headlines = self._news_client.get_headlines(company.ticker)
         news_retrieved_at = self._now()
+
+        # Give the signal engine only Watchtower-normalized facts. Provider JSON
+        # and provider-specific parsing remain inside their respective clients.
+        research_signal = self._signal_engine.evaluate(
+            ResearchSignalInput(
+                filing_provider=self._sec_client.PROVIDER_NAME,
+                filing_urls=tuple(filing.primary_document_url for filing in filings),
+                headline_provider=self._news_client.PROVIDER_NAME,
+                headline_urls=tuple(headline.url for headline in headlines),
+                price_provider=self._price_client.PROVIDER_NAME,
+                price_change_percent=price.change_percent,
+            )
+        )
 
         # This is the application boundary: internal provider records become
         # public Pydantic schema objects with Watchtower-controlled field names.
@@ -119,6 +138,7 @@ class CompanySnapshotService:
                 ),
                 items=[self._headline_response(headline) for headline in headlines],
             ),
+            research_signal=research_signal,
         )
 
     def _now(self) -> datetime:

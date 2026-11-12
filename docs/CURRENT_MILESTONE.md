@@ -3,93 +3,111 @@
 This file is the scope boundary for active work. Update it when evidence
 changes, not whenever a new idea appears.
 
-## Milestone 8: One-Shot Go Poller Command
+## Milestone 9: Explainable Research-Priority Signal
 
 **Status:** Complete — ready for review
 
 ### Goal
 
-Wire the completed Go SEC client and PostgreSQL recorder into an explicit
-one-shot command. Given configured CIKs, it retrieves recent 8-Ks and records
-each polling result, then exits.
-
-The command is deliberate: it does not start a recurring loop or make a live
-SEC request unless a user runs it with `--once` and real configuration.
+Turn a Watchtower company snapshot into a transparent five-level research
+priority signal. The signal tells a user which companies deserve deeper
+research now; it does not predict price direction or recommend buying, selling,
+or holding a security.
 
 ### User and System Value
 
-This proves the completed components operate together through a safe, visible
-entry point. It creates a runnable baseline before we introduce automated
-scheduling or background concurrency.
+The existing snapshot collects evidence but leaves prioritization entirely to
+the user. A deterministic signal makes that prioritization visible and
+repeatable while preserving every source link needed to inspect its reasoning.
 
 ### Concepts
 
-- Runtime configuration supplies environment-specific values outside source.
-- Dependency wiring creates real clients at the application boundary.
-- A one-shot command is a bounded operation that completes and exits.
-- An orchestration test verifies component collaboration with fakes.
+- A deterministic baseline produces the same output for the same input.
+- An ordinal signal places an item into an ordered category without claiming a
+  probability or prediction.
+- Evidence is the source-linked fact contributing to a derived result.
+- A typed interface separates callers from a particular engine implementation.
+- A pure function can be tested without HTTP, databases, clocks, or providers.
 
 ### Architecture Boundary
 
 ```text
---once command
-    -> configuration: CIKs, SEC identity, database URL
-    -> SEC client
-    -> PostgreSQL recorder
-    -> safe summary log
+Watchtower-owned snapshot evidence
+    -> ResearchSignalEngine contract
+    -> TransparentResearchSignalEngine baseline
+    -> level, numeric attention score, evidence, deterministic explanation
+    -> public Watchtower response
 ```
 
-The command owns configuration and real dependency construction. The runner
-owns the loop over configured CIKs. Existing SEC and storage packages retain
-their provider and SQL responsibilities.
+The engine receives normalized Watchtower records, never raw vendor JSON. Its
+public baseline stays in this repository. A later private or trained engine may
+implement the same contract without changing API callers.
+
+### Options Considered
+
+1. **LLM-generated interpretation:** flexible but non-deterministic, requires
+   prompt/version/evaluation work, and is unnecessary for this first signal.
+2. **Trained price-prediction model:** potentially appropriate for a later ML
+   milestone, but requires labels, point-in-time data, backtesting, and a
+   rigorous evaluation plan.
+3. **Transparent rule baseline:** selected. It is reproducible, source-linked,
+   safe to describe, and establishes the interface that later models must beat.
 
 ### Selected Design
 
-Use one comma-separated `WATCHTOWER_POLLER_CIKS` environment value and require
-the existing SEC User-Agent plus a PostgreSQL URL. This avoids hardcoded
-companies and makes a local run reproducible. The default command remains idle;
-only `--once` enables polling behavior.
+Calculate a bounded 0–100 **research-attention score** from observable facts:
+recent 8-K activity, headline count, and the magnitude—not direction—of the
+latest daily price movement. Map that score to five attention levels and return
+the contributing evidence plus a deterministic explanation.
+
+The score is an operational prioritization aid. Positive and negative price
+moves can both increase attention because either may justify research.
 
 ### Files
 
-- `poller/internal/config/config.go`
-- `poller/internal/config/config_test.go`
-- `poller/internal/pollrun/once.go`
-- `poller/internal/pollrun/once_test.go`
-- `poller/cmd/poller/main.go`
-- `README.md`
-- `.env.example`
+- `docs/adr/0002-explainable-research-priority-baseline.md`
+- `src/watchtower/signals/contracts.py`
+- `src/watchtower/signals/transparent.py`
+- `src/watchtower/schemas/company_snapshot.py`
+- `src/watchtower/services/company_snapshot.py`
+- `tests/signals/test_transparent.py`
+- `tests/services/test_company_snapshot_service.py`
+- `tests/schemas/test_company_snapshot.py`
 - `docs/CURRENT_MILESTONE.md`
+- `README.md`
 
 ### Build Order
 
-- [x] Parse and validate runtime configuration without exposing secrets.
-- [x] Implement a one-shot runner over configured CIKs.
-- [x] Wire `--once` to real SEC and PostgreSQL components.
-- [x] Test the runner with fake source and recorder objects.
-- [x] Document local setup and the one-shot command.
-- [x] Run Go quality checks and existing Python checks.
+- [x] Define the public signal and evidence schemas plus the engine contract.
+- [x] Implement and unit-test the pure transparent baseline.
+- [x] Compose the signal into the existing snapshot service.
+- [x] Verify the API response exposes source-linked evidence and an honest
+      limitation statement.
+- [x] Document the signal inputs, weights, limitations, and local run path.
+- [x] Run Go and Python quality checks plus a staged secret scan.
 
 ### Smallest Unfinished Piece
 
-Review the one-shot command and its configuration before adding automated
-scheduling in a future milestone.
+Define a stable, source-linked signal contract and test its five-level boundary
+behavior before integrating it into the live FastAPI response.
 
 ### Acceptance Criteria
 
-- [x] No ticker or CIK is hardcoded into the command.
-- [x] Missing or malformed runtime configuration fails clearly before polling.
-- [x] `--once` polls every configured CIK then exits.
-- [x] Default startup makes no SEC request.
-- [x] Runner tests make no live network or database request.
-- [x] README contains local-only setup and run instructions.
-- [x] Go and Python quality checks pass.
-- [x] No recurring scheduler, retry policy, rate limiter, Python refresh
-      worker, cache, ML, or UI behavior changes.
+- [x] The public response names five research-priority levels without using
+      buy, sell, hold, bullish, bearish, or prediction language.
+- [x] The same normalized evidence produces the same score, level, evidence,
+      and explanation.
+- [x] Every evidence item identifies its source and links to an underlying
+      filing or article when one exists.
+- [x] The baseline uses no LLM, model weights, private dataset, or live call.
+- [x] The service depends on a typed signal-engine contract, not directly on
+      the transparent implementation.
+- [x] Unit, service, schema, API, lint, format, and secret checks pass.
 
 ### Explicitly Out of Scope
 
-- Ticker-to-CIK resolution, database-managed watchlists, or a recurring loop.
-- Rate limiting, retry/backoff, advisory locks, or concurrent workers.
-- Python consumption of refresh requests, cache-backed API reads, ML, scoring,
-  and UI work.
+- Price-direction, return, or investment recommendations.
+- LLM summaries, sentiment inference, embeddings, or a trained ML model.
+- Historical labels, backtesting, model validation, or evaluation datasets.
+- Scheduled polling, database watchlists, cache-backed reads, or the local UI.
+- A private engine implementation or any proprietary logic in this repository.

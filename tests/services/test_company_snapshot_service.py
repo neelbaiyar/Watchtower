@@ -7,7 +7,12 @@ import pytest
 from watchtower.clients.marketaux import NewsHeadline
 from watchtower.clients.sec_edgar import SecCompany, SecFiling
 from watchtower.clients.yfinance import DailyPriceSnapshot
+from watchtower.schemas import ResearchSignalResponse
 from watchtower.services.company_snapshot import CompanySnapshotService
+from watchtower.signals import (
+    ResearchSignalInput,
+    TransparentResearchSignalEngine,
+)
 
 
 class FakeSecClient:
@@ -97,6 +102,36 @@ class FakeNewsClient:
         ]
 
 
+class FakeSignalEngine:
+    """Records normalized inputs instead of reproducing scoring-rule tests."""
+
+    def __init__(self) -> None:
+        self.inputs: list[ResearchSignalInput] = []
+
+    def evaluate(self, signal_input: ResearchSignalInput) -> ResearchSignalResponse:
+        self.inputs.append(signal_input)
+        return ResearchSignalResponse.model_validate(
+            {
+                "level": "low_attention",
+                "attention_score": 12,
+                "explanation": "Low research attention from one 8-K filing.",
+                "evidence": [
+                    {
+                        "category": "filing_activity",
+                        "source_provider": "SEC EDGAR",
+                        "source_urls": list(signal_input.filing_urls),
+                        "points": 12,
+                        "summary": "Snapshot contains one recent 8-K filing.",
+                    }
+                ],
+                "limitation": (
+                    "Research-priority signal only; not investment advice or a "
+                    "price prediction."
+                ),
+            }
+        )
+
+
 class SequenceClock:
     # Advancing one second per call makes every retrieval timestamp predictable
     # and proves the service records provenance separately for each source.
@@ -112,24 +147,34 @@ class SequenceClock:
 def build_service(
     *,
     clock: SequenceClock | None = None,
-) -> tuple[CompanySnapshotService, FakeSecClient, FakePriceClient, FakeNewsClient]:
+) -> tuple[
+    CompanySnapshotService,
+    FakeSecClient,
+    FakePriceClient,
+    FakeNewsClient,
+    FakeSignalEngine,
+]:
     # One helper creates a complete service plus the fakes needed to inspect
     # which ticker each provider received.
     sec_client = FakeSecClient()
     price_client = FakePriceClient()
     news_client = FakeNewsClient()
+    signal_engine = FakeSignalEngine()
     service = CompanySnapshotService(
         sec_client=sec_client,
         price_client=price_client,
         news_client=news_client,
+        signal_engine=signal_engine,
         clock=clock,
     )
-    return service, sec_client, price_client, news_client
+    return service, sec_client, price_client, news_client, signal_engine
 
 
 def test_service_composes_clients_into_public_snapshot() -> None:
     clock = SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC))
-    service, sec_client, price_client, news_client = build_service(clock=clock)
+    service, sec_client, price_client, news_client, signal_engine = build_service(
+        clock=clock
+    )
 
     snapshot = service.get_company_snapshot(" hpe ")
 
@@ -143,6 +188,20 @@ def test_service_composes_clients_into_public_snapshot() -> None:
     assert snapshot.filings.items[0].form == "8-K"
     assert snapshot.price.data.latest_close == 63.73
     assert snapshot.news.items[0].publisher == "Example News"
+    assert snapshot.research_signal.level == "low_attention"
+    assert signal_engine.inputs == [
+        ResearchSignalInput(
+            filing_provider="SEC EDGAR",
+            filing_urls=(
+                "https://www.sec.gov/Archives/edgar/data/1645590/"
+                "000164559026000078/hpe-20260902.htm",
+            ),
+            headline_provider="Marketaux",
+            headline_urls=("https://example.com/hpe-high",),
+            price_provider="Yahoo Finance via yfinance",
+            price_change_percent=0.3306,
+        )
+    ]
     assert snapshot.filings.source.retrieved_at == datetime(
         2026, 9, 25, 16, 0, tzinfo=UTC
     )
@@ -156,7 +215,34 @@ def test_service_composes_clients_into_public_snapshot() -> None:
 
 
 def test_service_rejects_a_naive_clock() -> None:
-    service, _, _, _ = build_service(clock=SequenceClock(datetime(2026, 9, 25, 16, 0)))
+    service, _, _, _, _ = build_service(
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0))
+    )
 
     with pytest.raises(ValueError, match="timezone-aware"):
         service.get_company_snapshot("HPE")
+
+
+def test_service_can_use_the_public_transparent_signal_baseline() -> None:
+    sec_client = FakeSecClient()
+    price_client = FakePriceClient()
+    news_client = FakeNewsClient()
+    service = CompanySnapshotService(
+        sec_client=sec_client,
+        price_client=price_client,
+        news_client=news_client,
+        signal_engine=TransparentResearchSignalEngine(),
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    snapshot = service.get_company_snapshot("HPE")
+
+    # One filing (12), one headline (6), and a 0.33% movement (8) create a
+    # reproducible monitor-level attention result without inferring direction.
+    assert snapshot.research_signal.attention_score == 26
+    assert snapshot.research_signal.level == "monitor"
+    assert [item.category for item in snapshot.research_signal.evidence] == [
+        "filing_activity",
+        "headline_activity",
+        "price_movement",
+    ]

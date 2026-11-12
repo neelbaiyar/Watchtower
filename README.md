@@ -2,7 +2,8 @@
 
 Watchtower is a source-grounded technology company research API. Given a ticker,
 it combines recent SEC 8-K filings, a daily market-price snapshot, and current
-headline metadata into one Watchtower-owned JSON response.
+headline metadata into one Watchtower-owned JSON response with a transparent
+research-priority signal.
 
 This repository contains a complete FastAPI research-snapshot slice and a
 local-only Go foundation for durable SEC 8-K ingestion. It is a research tool,
@@ -17,6 +18,8 @@ not an investment recommendation or automated trading system.
 - A service layer composes the providers while the FastAPI route stays thin.
 - Strict Pydantic models define the public JSON and OpenAPI contracts.
 - Provider failures become controlled HTTP responses instead of leaked payloads.
+- A deterministic, source-linked research-attention signal makes evidence
+  visible without claiming to predict price direction.
 - Secrets and personal contact configuration remain outside Git.
 
 ## Architecture
@@ -38,6 +41,35 @@ CompanySnapshotResponse
 Provider clients return Watchtower-owned internal records. The service maps
 those records into public Pydantic response models; the route never processes
 raw vendor JSON.
+
+## Explainable research-priority signal
+
+Every company snapshot includes `research_signal`. It is a reproducible,
+five-level **research-attention** result—not a price forecast or investment
+recommendation. Its purpose is to help a user decide what to investigate next.
+
+| Level | Attention-score range | Meaning |
+| --- | ---: | --- |
+| `quiet` | 0 | No weighted activity in the current snapshot. |
+| `low_attention` | 1–24 | Some activity is present. |
+| `monitor` | 25–49 | Multiple visible facts justify keeping the company in view. |
+| `elevated_attention` | 50–74 | The snapshot contains substantial activity worth timely review. |
+| `high_attention` | 75–100 | Several strong activity indicators warrant prioritizing research. |
+
+The public baseline uses only normalized facts already present in a snapshot:
+
+| Evidence | Points |
+| --- | ---: |
+| Each of the first three recent 8-K filings | 12 each |
+| Fourth or later 8-K filing | 4 total extra, capped at 40 filing points |
+| Each of the first three ticker-associated headlines | 6 each |
+| Daily price-movement magnitude of 0.25%, 1%, 3%, or 5%+ | 8, 18, 30, or 42 |
+
+Price direction is intentionally ignored: an upward or downward move of the
+same size receives the same attention weight. Each signal includes its score,
+level, a deterministic explanation, and source-linked filing/headline evidence.
+The price client currently has no direct source URL, so price evidence names its
+provider without inventing a link.
 
 ## Prerequisites
 
@@ -163,6 +195,8 @@ The response contains:
 - `filings`, containing SEC source metadata and recent 8-K records.
 - `price`, containing its source metadata and latest daily-close information.
 - `news`, containing Marketaux retrieval metadata and article metadata.
+- `research_signal`, containing a research-attention score, ordered level,
+  source-linked evidence, explanation, and an explicit limitation statement.
 
 Source retrieval timestamps are deliberately separate from filing dates,
 trading dates, and article publication times. A response retrieved now can
@@ -199,8 +233,10 @@ uv run pytest -q
 - Marketaux's free plan is rate-limited.
 - The FastAPI snapshot endpoint performs live provider calls and has no cache.
 - The Go poller has an explicit one-shot mode, but no recurring scheduler.
-- No ML model, sentiment score, ranking, knowledge graph, or consequence engine
-  is part of this milestone.
+- The public signal is a transparent baseline, not a trained ML model, sentiment
+  classifier, ranking system, knowledge graph, or consequence engine.
+- No private scoring logic, model weights, labeled dataset, or proprietary
+  heuristic is present in this repository.
 
 Recurring polling, cache-backed reads, and consumption of EDGAR-triggered
 refresh requests are future work. Proprietary scoring or model logic will

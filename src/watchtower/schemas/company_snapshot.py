@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl
@@ -81,6 +82,38 @@ class NewsSectionResponse(WatchtowerResponseModel):
     items: list[HeadlineResponse]
 
 
+class ResearchPriority(StrEnum):
+    """Ordered levels for research attention, not an investment outlook."""
+
+    QUIET = "quiet"
+    LOW_ATTENTION = "low_attention"
+    MONITOR = "monitor"
+    ELEVATED_ATTENTION = "elevated_attention"
+    HIGH_ATTENTION = "high_attention"
+
+
+class SignalEvidenceResponse(WatchtowerResponseModel):
+    """One observable source fact contributing to a research-priority signal."""
+
+    category: Literal["filing_activity", "headline_activity", "price_movement"]
+    source_provider: str = Field(min_length=1)
+    source_urls: list[HttpUrl]
+    points: int = Field(ge=1, le=100)
+    summary: str = Field(min_length=1)
+
+
+class ResearchSignalResponse(WatchtowerResponseModel):
+    """Deterministic research-priority output with inspectable evidence."""
+
+    level: ResearchPriority
+    attention_score: int = Field(ge=0, le=100)
+    explanation: str = Field(min_length=1)
+    evidence: list[SignalEvidenceResponse]
+    limitation: Literal[
+        "Research-priority signal only; not investment advice or a price prediction."
+    ]
+
+
 class CompanySnapshotResponse(WatchtowerResponseModel):
     """Stable public contract composed from Watchtower's provider boundaries."""
 
@@ -91,3 +124,6 @@ class CompanySnapshotResponse(WatchtowerResponseModel):
     filings: FilingsSectionResponse
     price: PriceSectionResponse
     news: NewsSectionResponse
+    # This is derived Watchtower data. Its evidence remains alongside the
+    # signal so clients can inspect facts instead of treating the score as fact.
+    research_signal: ResearchSignalResponse

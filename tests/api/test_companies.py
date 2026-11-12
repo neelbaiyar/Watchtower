@@ -49,6 +49,16 @@ def snapshot_response() -> CompanySnapshotResponse:
                 },
                 "items": [],
             },
+            "research_signal": {
+                "level": "quiet",
+                "attention_score": 0,
+                "explanation": "No weighted activity is present.",
+                "evidence": [],
+                "limitation": (
+                    "Research-priority signal only; not investment advice or a "
+                    "price prediction."
+                ),
+            },
         }
     )
 
@@ -80,6 +90,7 @@ def test_snapshot_route_returns_owned_response() -> None:
     payload = response.json()
     assert payload["ticker"] == "HPE"
     assert payload["price"]["data"]["latest_close"] == 63.73
+    assert payload["research_signal"]["level"] == "quiet"
     assert payload["generated_at"] == "2026-09-25T16:00:00Z"
 
 

@@ -23,6 +23,7 @@ from watchtower.clients.sec_edgar import (
 from watchtower.clients.yfinance import PriceClientError, YFinanceClient
 from watchtower.config import Settings
 from watchtower.services import CompanySnapshotService
+from watchtower.signals import TransparentResearchSignalEngine
 
 
 def create_app(
@@ -56,6 +57,7 @@ def create_app(
                 sec_client=sec_client,
                 price_client=YFinanceClient(),
                 news_client=news_client,
+                signal_engine=TransparentResearchSignalEngine(),
             )
             yield
 

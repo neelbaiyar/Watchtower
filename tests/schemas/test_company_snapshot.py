@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from watchtower.schemas.company_snapshot import (
     CompanySnapshotResponse,
     DailyPriceResponse,
+    ResearchSignalResponse,
     SourceMetadata,
 )
 
@@ -68,6 +69,27 @@ def valid_snapshot_data() -> dict[str, object]:
                 }
             ],
         },
+        "research_signal": {
+            "level": "monitor",
+            "attention_score": 42,
+            "explanation": "Monitor research attention from visible activity.",
+            "evidence": [
+                {
+                    "category": "filing_activity",
+                    "source_provider": "SEC EDGAR",
+                    "source_urls": [
+                        "https://www.sec.gov/Archives/edgar/data/1645590/"
+                        "000164559026000078/hpe-20260902.htm"
+                    ],
+                    "points": 24,
+                    "summary": "Snapshot contains two recent 8-K filings.",
+                }
+            ],
+            "limitation": (
+                "Research-priority signal only; not investment advice or a price "
+                "prediction."
+            ),
+        },
     }
 
 
@@ -83,6 +105,7 @@ def test_company_snapshot_serializes_as_owned_json() -> None:
     assert payload["price"]["data"]["price_date"] == "2026-09-25"
     assert payload["news"]["items"][0]["publisher"] == "Example News"
     assert payload["news"]["items"][0]["url"] == "https://example.com/hpe-high"
+    assert payload["research_signal"]["level"] == "monitor"
 
 
 def test_timestamps_must_include_a_timezone() -> None:
@@ -130,3 +153,19 @@ def test_valid_aware_datetime_is_preserved() -> None:
     metadata = SourceMetadata(provider="Marketaux", retrieved_at=retrieved_at)
 
     assert metadata.retrieved_at == retrieved_at
+
+
+def test_signal_rejects_prediction_style_levels() -> None:
+    with pytest.raises(ValidationError, match="Input should be"):
+        ResearchSignalResponse.model_validate(
+            {
+                "level": "bullish",
+                "attention_score": 80,
+                "explanation": "This must not be accepted.",
+                "evidence": [],
+                "limitation": (
+                    "Research-priority signal only; not investment advice or a "
+                    "price prediction."
+                ),
+            }
+        )
