@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -29,6 +30,8 @@ from watchtower.schemas.company_snapshot import (
 )
 from watchtower.signals.contracts import ResearchSignalEngine, ResearchSignalInput
 from watchtower.storage import CachedSnapshot, SnapshotStore, SnapshotStoreError
+
+logger = logging.getLogger(__name__)
 
 
 class SnapshotCompositionError(RuntimeError):
@@ -231,10 +234,13 @@ class CompanySnapshotService:
             return None
         try:
             return self._snapshot_store.load(ticker)
-        except SnapshotStoreError:
+        except SnapshotStoreError as error:
             # Live provider calls remain the source of truth when local storage
             # is temporarily unavailable. The caller receives a provider error
             # only if there is neither live data nor a usable stored snapshot.
+            # Log the store's own message only; the driver error underneath can
+            # carry connection details.
+            logger.warning("snapshot cache read failed for %s: %s", ticker, error)
             return None
 
     def _save_snapshot(self, snapshot: CompanySnapshotResponse) -> None:
@@ -244,9 +250,12 @@ class CompanySnapshotService:
             return
         try:
             self._snapshot_store.save(snapshot)
-        except SnapshotStoreError:
+        except SnapshotStoreError as error:
             # The live result is still truthful and useful even if persistence
             # fails. A later successful live request can repair the cache.
+            logger.warning(
+                "snapshot cache write failed for %s: %s", snapshot.ticker, error
+            )
             return
 
     def _is_fresh(self, cached: CachedSnapshot) -> bool:

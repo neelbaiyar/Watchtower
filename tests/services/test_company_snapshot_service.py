@@ -17,7 +17,7 @@ from watchtower.signals import (
     ResearchSignalInput,
     TransparentResearchSignalEngine,
 )
-from watchtower.storage import CachedSnapshot
+from watchtower.storage import CachedSnapshot, SnapshotStoreError
 
 
 class FakeSecClient:
@@ -163,6 +163,16 @@ class FakeSnapshotStore:
 
     def save(self, snapshot: object) -> None:
         self.saved_snapshots.append(snapshot)
+
+
+class BrokenSnapshotStore:
+    """Simulates a cache whose database is unreachable."""
+
+    def load(self, ticker: str) -> CachedSnapshot | None:
+        raise SnapshotStoreError("load cached snapshot")
+
+    def save(self, snapshot: object) -> None:
+        raise SnapshotStoreError("save cached snapshot")
 
 
 class FailingPriceClient:
@@ -402,3 +412,25 @@ def test_schema_invalid_provider_data_falls_back_to_stale_snapshot() -> None:
 
     assert snapshot.snapshot_status == "stale"
     assert store.saved_snapshots == []
+
+
+def test_unavailable_cache_is_logged_and_does_not_block_a_live_snapshot(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = CompanySnapshotService(
+        sec_client=FakeSecClient(),
+        price_client=FakePriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=BrokenSnapshotStore(),
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    with caplog.at_level("WARNING", logger="watchtower.services.company_snapshot"):
+        snapshot = service.get_company_snapshot("HPE")
+
+    assert snapshot.snapshot_status == "live"
+    assert [record.getMessage() for record in caplog.records] == [
+        "snapshot cache read failed for HPE: load cached snapshot",
+        "snapshot cache write failed for HPE: save cached snapshot",
+    ]
