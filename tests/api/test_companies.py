@@ -9,6 +9,7 @@ from watchtower.api.app import create_app
 from watchtower.clients.marketaux import NewsRateLimitError
 from watchtower.clients.sec_edgar import SecRequestError, SecTickerNotFoundError
 from watchtower.schemas import CompanySnapshotResponse
+from watchtower.services import SnapshotCompositionError
 
 
 def snapshot_response() -> CompanySnapshotResponse:
@@ -165,6 +166,11 @@ def test_refresh_query_requests_live_provider_data() -> None:
             NewsRateLimitError("private details"),
             503,
             "News provider temporarily unavailable",
+        ),
+        (
+            SnapshotCompositionError("private details"),
+            502,
+            "Upstream provider request failed",
         ),
     ],
 )

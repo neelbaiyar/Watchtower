@@ -25,7 +25,7 @@ from watchtower.clients.sec_edgar import (
 )
 from watchtower.clients.yfinance import PriceClientError, YFinanceClient
 from watchtower.config import Settings
-from watchtower.services import CompanySnapshotService
+from watchtower.services import CompanySnapshotService, SnapshotCompositionError
 from watchtower.signals import TransparentResearchSignalEngine
 from watchtower.storage import PostgresSnapshotStore, SnapshotStoreError
 
@@ -148,7 +148,10 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     async def upstream_failure_handler(
         _: Request,
-        __: SecEdgarError | PriceClientError | NewsClientError,
+        __: SecEdgarError
+        | PriceClientError
+        | NewsClientError
+        | SnapshotCompositionError,
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -161,3 +164,4 @@ def _register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(SecEdgarError, upstream_failure_handler)
     app.add_exception_handler(PriceClientError, upstream_failure_handler)
     app.add_exception_handler(NewsClientError, upstream_failure_handler)
+    app.add_exception_handler(SnapshotCompositionError, upstream_failure_handler)

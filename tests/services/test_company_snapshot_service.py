@@ -1,5 +1,6 @@
 """Service tests with fakes that expose orchestration order and data flow."""
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -8,7 +9,10 @@ from watchtower.clients.marketaux import NewsHeadline
 from watchtower.clients.sec_edgar import SecCompany, SecFiling
 from watchtower.clients.yfinance import DailyPriceSnapshot, PriceRequestError
 from watchtower.schemas import ResearchSignalResponse
-from watchtower.services.company_snapshot import CompanySnapshotService
+from watchtower.services.company_snapshot import (
+    CompanySnapshotService,
+    SnapshotCompositionError,
+)
 from watchtower.signals import (
     ResearchSignalInput,
     TransparentResearchSignalEngine,
@@ -168,6 +172,19 @@ class FailingPriceClient:
 
     def get_daily_price(self, ticker: str) -> DailyPriceSnapshot:
         raise PriceRequestError(f"price provider unavailable for {ticker}")
+
+
+class MalformedAccessionSecClient(FakeSecClient):
+    """Returns a filing the SEC client accepts but the public schema rejects."""
+
+    def get_recent_8k_filings(
+        self,
+        ticker: str,
+        *,
+        limit: int = 5,
+    ) -> list[SecFiling]:
+        (filing,) = super().get_recent_8k_filings(ticker, limit=limit)
+        return [replace(filing, accession_number="not-an-accession")]
 
 
 def build_service(
@@ -345,3 +362,43 @@ def test_service_returns_stale_snapshot_after_forced_refresh_provider_failure() 
 
     assert snapshot.snapshot_status == "stale"
     assert sec_client.requested_tickers == ["HPE", "HPE"]
+
+
+def test_schema_invalid_provider_data_raises_an_owned_error() -> None:
+    service = CompanySnapshotService(
+        sec_client=MalformedAccessionSecClient(),
+        price_client=FakePriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    with pytest.raises(SnapshotCompositionError) as error:
+        service.get_company_snapshot("HPE")
+
+    assert "not-an-accession" not in str(error.value)
+
+
+def test_schema_invalid_provider_data_falls_back_to_stale_snapshot() -> None:
+    live_service, _, _, _, _ = build_service(
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC))
+    )
+    store = FakeSnapshotStore(
+        CachedSnapshot(
+            snapshot=live_service.get_company_snapshot("HPE"),
+            cached_at=datetime(2026, 9, 25, 15, 0, tzinfo=UTC),
+        )
+    )
+    service = CompanySnapshotService(
+        sec_client=MalformedAccessionSecClient(),
+        price_client=FakePriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=store,
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    snapshot = service.get_company_snapshot("HPE")
+
+    assert snapshot.snapshot_status == "stale"
+    assert store.saved_snapshots == []

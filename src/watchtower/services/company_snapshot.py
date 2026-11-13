@@ -6,6 +6,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from pydantic import ValidationError
+
 from watchtower.clients.marketaux import NewsClientError, NewsHeadline
 from watchtower.clients.sec_edgar import (
     SecCompany,
@@ -27,6 +29,10 @@ from watchtower.schemas.company_snapshot import (
 )
 from watchtower.signals.contracts import ResearchSignalEngine, ResearchSignalInput
 from watchtower.storage import CachedSnapshot, SnapshotStore, SnapshotStoreError
+
+
+class SnapshotCompositionError(RuntimeError):
+    """Raised when provider records cannot form a valid public snapshot."""
 
 
 class SecClient(Protocol):
@@ -107,7 +113,12 @@ class CompanySnapshotService:
         # silently returning an old entry for a symbol that no longer resolves.
         except SecTickerNotFoundError:
             raise
-        except SecEdgarError, PriceClientError, NewsClientError:
+        except (
+            SecEdgarError,
+            PriceClientError,
+            NewsClientError,
+            SnapshotCompositionError,
+        ):
             if cached is not None:
                 return self._with_snapshot_status(cached.snapshot, SnapshotStatus.STALE)
             raise
@@ -132,6 +143,36 @@ class CompanySnapshotService:
         headlines = self._news_client.get_headlines(company.ticker)
         news_retrieved_at = self._now()
 
+        # Clients check structure, but the public schema is stricter (accession
+        # format, URL syntax, currency code). A record that passes the client
+        # and fails the schema is still a provider problem, so it must reach
+        # the stale fallback and the 502 handler rather than surface as a 500.
+        try:
+            return self._compose_snapshot(
+                company=company,
+                filings=filings,
+                filings_retrieved_at=filings_retrieved_at,
+                price=price,
+                price_retrieved_at=price_retrieved_at,
+                headlines=headlines,
+                news_retrieved_at=news_retrieved_at,
+            )
+        except ValidationError as error:
+            raise SnapshotCompositionError(
+                "provider data failed public schema validation"
+            ) from error
+
+    def _compose_snapshot(
+        self,
+        *,
+        company: SecCompany,
+        filings: list[SecFiling],
+        filings_retrieved_at: datetime,
+        price: DailyPriceSnapshot,
+        price_retrieved_at: datetime,
+        headlines: list[NewsHeadline],
+        news_retrieved_at: datetime,
+    ) -> CompanySnapshotResponse:
         # Give the signal engine only Watchtower-normalized facts. Provider JSON
         # and provider-specific parsing remain inside their respective clients.
         research_signal = self._signal_engine.evaluate(
