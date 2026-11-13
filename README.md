@@ -70,10 +70,17 @@ The public baseline uses only normalized facts already present in a snapshot:
 
 | Evidence | Points |
 | --- | ---: |
-| Each of the first three recent 8-K filings | 12 each |
-| Fourth or later 8-K filing | 4 total extra, capped at 40 filing points |
-| Each of the first three ticker-associated headlines | 6 each |
+| Each of the first three 8-K filings filed in the last 30 days | 12 each |
+| Fourth or later 8-K filing in that 30-day window | 4 total extra, capped at 40 filing points |
+| Each of the first three ticker-associated headlines published in the last 7 days | 6 each |
 | Daily price-movement magnitude of 0.25%, 1%, 3%, or 5%+ | 8, 18, 30, or 42 |
+
+Providers return their newest items however old those are, so the windows are
+what make "recent" mean something. A snapshot still lists the latest filings
+and headlines it retrieved; only the ones inside the windows earn points and
+appear as signal evidence. Ages are measured from the snapshot's
+`generated_at` time. Filing dates have no time zone, so they are compared as
+whole calendar days against the UTC date.
 
 Price direction is intentionally ignored: an upward or downward move of the
 same size receives the same attention weight. Each signal includes its score,

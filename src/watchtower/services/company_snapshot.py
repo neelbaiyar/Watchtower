@@ -28,7 +28,12 @@ from watchtower.schemas.company_snapshot import (
     SnapshotStatus,
     SourceMetadata,
 )
-from watchtower.signals.contracts import ResearchSignalEngine, ResearchSignalInput
+from watchtower.signals.contracts import (
+    FilingFact,
+    HeadlineFact,
+    ResearchSignalEngine,
+    ResearchSignalInput,
+)
 from watchtower.storage import CachedSnapshot, SnapshotStore, SnapshotStoreError
 
 logger = logging.getLogger(__name__)
@@ -178,12 +183,25 @@ class CompanySnapshotService:
     ) -> CompanySnapshotResponse:
         # Give the signal engine only Watchtower-normalized facts. Provider JSON
         # and provider-specific parsing remain inside their respective clients.
+        # The signal is scored as of the same instant the snapshot reports as
+        # its generation time, so a stored snapshot stays self-consistent.
+        generated_at = self._now()
         research_signal = self._signal_engine.evaluate(
             ResearchSignalInput(
+                as_of=generated_at,
                 filing_provider=self._sec_client.PROVIDER_NAME,
-                filing_urls=tuple(filing.primary_document_url for filing in filings),
+                filings=tuple(
+                    FilingFact(
+                        url=filing.primary_document_url,
+                        filing_date=filing.filing_date,
+                    )
+                    for filing in filings
+                ),
                 headline_provider=self._news_client.PROVIDER_NAME,
-                headline_urls=tuple(headline.url for headline in headlines),
+                headlines=tuple(
+                    HeadlineFact(url=headline.url, published_at=headline.published_at)
+                    for headline in headlines
+                ),
                 price_provider=self._price_client.PROVIDER_NAME,
                 price_change_percent=price.change_percent,
             )
@@ -195,7 +213,7 @@ class CompanySnapshotService:
             ticker=company.ticker,
             company_name=company.name,
             cik=company.cik,
-            generated_at=self._now(),
+            generated_at=generated_at,
             filings=FilingsSectionResponse(
                 source=SourceMetadata(
                     provider=self._sec_client.PROVIDER_NAME,

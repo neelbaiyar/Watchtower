@@ -18,16 +18,19 @@ Expose a five-level, deterministic research-priority signal. The transparent
 baseline calculates a bounded attention score from normalized Watchtower
 evidence:
 
-- recent 8-K filing activity;
-- number of recent ticker-associated headlines; and
+- 8-K filings filed in the 30 days before the snapshot;
+- ticker-associated headlines published in the 7 days before the snapshot; and
 - magnitude of the latest daily price movement, regardless of direction.
 
 The response includes the level, score, source-linked evidence, and a template
 based explanation. It explicitly states that it is not investment advice or a
 prediction of price direction.
 
-The application depends on a small `ResearchSignalEngine` contract. The public
-transparent baseline implements that contract. A future private or trained
+The application depends on a small `ResearchSignalEngine` contract. Its input
+carries each filing's date, each headline's publication time, and the `as_of`
+instant the evidence was gathered. Engines do not read a clock, so the same
+input always produces the same result. The public transparent baseline
+implements that contract. A future private or trained
 engine may implement the same contract through dependency injection after it is
 developed outside this repository.
 
@@ -69,6 +72,34 @@ must outperform. Selected.
 - Rule weights encode a simple product policy and may need revisiting with user
   feedback.
 - Headline count is a proxy for attention, not a measure of importance.
+
+## Revision: 2026-11-13, Date Windows
+
+The first version counted every filing and headline a provider returned.
+Providers return their newest items regardless of age, so nearly any active
+company received five filings (40 points) and three headlines (18 points). A
+score of 58 is already `elevated_attention` before price is considered, which
+meant the signal could not separate a busy company from a quiet one.
+
+The baseline now counts a filing only when it was filed within 30 days of the
+snapshot and a headline only when it was published within 7 days. Both
+boundaries are inclusive.
+
+- **30 days for filings:** an 8-K reports a material event, and a month is long
+  enough to cover the follow-up research that event deserves while excluding
+  last quarter's routine filings.
+- **7 days for headlines:** news attention fades much faster than a filing's
+  relevance, and the provider returns at most three headlines per request.
+
+Point values and level thresholds are unchanged. The public response schema is
+unchanged; only the evidence summaries now name the window. The engine input
+contract changed from bare URL lists to dated facts plus `as_of`, which any
+replacement engine must also accept.
+
+Filing dates have no time zone, so they are compared as whole calendar days
+against the UTC date of the snapshot. Near midnight UTC this can shift the
+boundary by one day. The windows are product policy, not measured optima, and
+should be revisited with user feedback.
 
 ## Guardrails
 

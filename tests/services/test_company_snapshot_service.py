@@ -18,6 +18,8 @@ from watchtower.services.company_snapshot import (
     SnapshotCompositionError,
 )
 from watchtower.signals import (
+    FilingFact,
+    HeadlineFact,
     ResearchSignalInput,
     TransparentResearchSignalEngine,
 )
@@ -128,7 +130,7 @@ class FakeSignalEngine:
                     {
                         "category": "filing_activity",
                         "source_provider": "SEC EDGAR",
-                        "source_urls": list(signal_input.filing_urls),
+                        "source_urls": [filing.url for filing in signal_input.filings],
                         "points": 12,
                         "summary": "Snapshot contains one recent 8-K filing.",
                     }
@@ -248,13 +250,24 @@ def test_service_composes_clients_into_public_snapshot() -> None:
     assert snapshot.research_signal.level == "low_attention"
     assert signal_engine.inputs == [
         ResearchSignalInput(
+            as_of=snapshot.generated_at,
             filing_provider="SEC EDGAR",
-            filing_urls=(
-                "https://www.sec.gov/Archives/edgar/data/1645590/"
-                "000164559026000078/hpe-20260902.htm",
+            filings=(
+                FilingFact(
+                    url=(
+                        "https://www.sec.gov/Archives/edgar/data/1645590/"
+                        "000164559026000078/hpe-20260902.htm"
+                    ),
+                    filing_date=date(2026, 9, 2),
+                ),
             ),
             headline_provider="Marketaux",
-            headline_urls=("https://example.com/hpe-high",),
+            headlines=(
+                HeadlineFact(
+                    url="https://example.com/hpe-high",
+                    published_at=datetime(2026, 9, 25, 12, 15, 18, tzinfo=UTC),
+                ),
+            ),
             price_provider="Yahoo Finance via yfinance",
             price_change_percent=0.3306,
         )
@@ -505,3 +518,24 @@ def test_provider_failure_without_a_stored_snapshot_is_raised() -> None:
 
     with pytest.raises(PriceRequestError):
         service.get_company_snapshot("HPE")
+
+
+def test_old_filings_and_headlines_do_not_raise_the_public_signal() -> None:
+    # The fakes return a September 2026 filing and headline. Months later the
+    # providers would still return them as their newest items.
+    service = CompanySnapshotService(
+        sec_client=FakeSecClient(),
+        price_client=FakePriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=TransparentResearchSignalEngine(),
+        clock=SequenceClock(datetime(2027, 3, 1, 16, 0, tzinfo=UTC)),
+    )
+
+    snapshot = service.get_company_snapshot("HPE")
+
+    assert len(snapshot.filings.items) == 1
+    assert len(snapshot.news.items) == 1
+    assert [item.category for item in snapshot.research_signal.evidence] == [
+        "price_movement"
+    ]
+    assert snapshot.research_signal.level == "low_attention"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, timedelta
+
 from watchtower.schemas import (
     ResearchPriority,
     ResearchSignalResponse,
@@ -16,6 +18,12 @@ class TransparentResearchSignalEngine:
     LIMITATION = (
         "Research-priority signal only; not investment advice or a price prediction."
     )
+    # "Recent" needs a boundary. Providers return the newest items they have,
+    # however old, so without these windows almost every company would score
+    # as busy. An 8-K stays relevant to research for about a month; headline
+    # attention fades within a week.
+    FILING_WINDOW_DAYS = 30
+    HEADLINE_WINDOW_DAYS = 7
 
     def evaluate(self, signal_input: ResearchSignalInput) -> ResearchSignalResponse:
         """Build one reproducible signal from filing, headline, and price facts."""
@@ -39,7 +47,16 @@ class TransparentResearchSignalEngine:
     ) -> list[SignalEvidenceResponse]:
         evidence: list[SignalEvidenceResponse] = []
 
-        filing_count = len(signal_input.filing_urls)
+        # Filing dates carry no time zone, so compare whole calendar days
+        # against the UTC date of the snapshot. A date that reads as slightly
+        # in the future because of that offset still counts as recent.
+        as_of_date = signal_input.as_of.astimezone(UTC).date()
+        recent_filing_urls = [
+            filing.url
+            for filing in signal_input.filings
+            if (as_of_date - filing.filing_date).days <= cls.FILING_WINDOW_DAYS
+        ]
+        filing_count = len(recent_filing_urls)
         if filing_count:
             # The first three filings receive equal weight. A fourth or later
             # filing earns a small extra amount while preventing one source
@@ -49,27 +66,35 @@ class TransparentResearchSignalEngine:
                 SignalEvidenceResponse(
                     category="filing_activity",
                     source_provider=signal_input.filing_provider,
-                    source_urls=list(signal_input.filing_urls),
+                    source_urls=recent_filing_urls,
                     points=filing_points,
                     summary=(
-                        f"Snapshot contains {filing_count} recent 8-K filing"
-                        f"{'s' if filing_count != 1 else ''}."
+                        f"Snapshot contains {filing_count} 8-K filing"
+                        f"{'s' if filing_count != 1 else ''} from the last "
+                        f"{cls.FILING_WINDOW_DAYS} days."
                     ),
                 )
             )
 
-        headline_count = len(signal_input.headline_urls)
+        headline_window = timedelta(days=cls.HEADLINE_WINDOW_DAYS)
+        recent_headline_urls = [
+            headline.url
+            for headline in signal_input.headlines
+            if signal_input.as_of - headline.published_at <= headline_window
+        ]
+        headline_count = len(recent_headline_urls)
         if headline_count:
             headline_points = min(headline_count, 3) * 6
             evidence.append(
                 SignalEvidenceResponse(
                     category="headline_activity",
                     source_provider=signal_input.headline_provider,
-                    source_urls=list(signal_input.headline_urls),
+                    source_urls=recent_headline_urls,
                     points=headline_points,
                     summary=(
                         f"Snapshot contains {headline_count} ticker-associated headline"
-                        f"{'s' if headline_count != 1 else ''}."
+                        f"{'s' if headline_count != 1 else ''} from the last "
+                        f"{cls.HEADLINE_WINDOW_DAYS} days."
                     ),
                 )
             )
