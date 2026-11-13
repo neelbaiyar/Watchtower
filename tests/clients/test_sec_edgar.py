@@ -160,3 +160,105 @@ def test_provider_failure_does_not_leak_response_body() -> None:
 
     assert str(error.value) == "SEC request failed"
     assert "provider-internal-details" not in str(error.value)
+
+
+class FakeMonotonic:
+    """A clock the test moves by hand, in seconds."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_ticker_mapping_is_downloaded_again_after_its_ttl() -> None:
+    mapping_payloads = [
+        TICKER_PAYLOAD,
+        {
+            **TICKER_PAYLOAD,
+            "2": {"cik_str": 1045810, "ticker": "NVDA", "title": "NVIDIA CORP"},
+        },
+    ]
+    mapping_requests = 0
+
+    def handle_request(_: httpx.Request) -> httpx.Response:
+        nonlocal mapping_requests
+        payload = mapping_payloads[min(mapping_requests, 1)]
+        mapping_requests += 1
+        return httpx.Response(200, json=payload)
+
+    clock = FakeMonotonic()
+    http_client = httpx.Client(transport=httpx.MockTransport(handle_request))
+    client = SecEdgarClient(
+        user_agent="Watchtower tests test@example.com",
+        http_client=http_client,
+        monotonic=clock,
+    )
+    try:
+        with pytest.raises(SecTickerNotFoundError):
+            client.resolve_company("NVDA")
+
+        # Just inside the default 24 hours the stored mapping is still used.
+        clock.now += 24 * 60 * 60 - 1
+        with pytest.raises(SecTickerNotFoundError):
+            client.resolve_company("NVDA")
+        assert mapping_requests == 1
+
+        clock.now += 1
+        assert client.resolve_company("NVDA").cik == "0001045810"
+        assert mapping_requests == 2
+    finally:
+        http_client.close()
+
+
+def test_failed_mapping_refresh_keeps_the_previous_mapping(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mapping_requests = 0
+
+    def handle_request(_: httpx.Request) -> httpx.Response:
+        nonlocal mapping_requests
+        mapping_requests += 1
+        if mapping_requests == 1:
+            return httpx.Response(200, json=TICKER_PAYLOAD)
+        return httpx.Response(503, text="provider-internal-details")
+
+    clock = FakeMonotonic()
+    http_client = httpx.Client(transport=httpx.MockTransport(handle_request))
+    client = SecEdgarClient(
+        user_agent="Watchtower tests test@example.com",
+        http_client=http_client,
+        ticker_mapping_ttl_seconds=60,
+        monotonic=clock,
+    )
+    try:
+        assert client.resolve_company("HPE").cik == "0001645590"
+
+        clock.now += 61
+        with caplog.at_level("WARNING", logger="watchtower.clients.sec_edgar"):
+            assert client.resolve_company("HPE").cik == "0001645590"
+        assert mapping_requests == 2
+        assert "keeping the previous mapping" in caplog.text
+        assert "provider-internal-details" not in caplog.text
+
+        # The outage is not retried on every lookup, only after the delay.
+        assert client.resolve_company("AAPL").cik == "0000320193"
+        assert mapping_requests == 2
+        clock.now += SecEdgarClient.TICKER_MAPPING_RETRY_SECONDS
+        client.resolve_company("HPE")
+        assert mapping_requests == 3
+    finally:
+        http_client.close()
+
+
+def test_first_mapping_download_failure_is_still_raised() -> None:
+    def handle_request(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    client, http_client = build_client(httpx.MockTransport(handle_request))
+    try:
+        with pytest.raises(SecRequestError):
+            client.resolve_company("HPE")
+    finally:
+        http_client.close()

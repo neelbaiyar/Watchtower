@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class SecEdgarError(RuntimeError):
@@ -58,6 +64,10 @@ class SecEdgarClient:
     ARCHIVES_URL_TEMPLATE = (
         "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
     )
+    # After a failed refresh the previous mapping stays in use. Waiting before
+    # the next attempt keeps an SEC outage from adding a timeout to every
+    # ticker lookup.
+    TICKER_MAPPING_RETRY_SECONDS = 5 * 60
 
     def __init__(
         self,
@@ -65,12 +75,16 @@ class SecEdgarClient:
         user_agent: str,
         http_client: httpx.Client | None = None,
         timeout_seconds: float = 10.0,
+        ticker_mapping_ttl_seconds: float = 24 * 60 * 60,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         normalized_user_agent = user_agent.strip()
         if not normalized_user_agent:
             raise ValueError("SEC user agent must not be empty")
         if timeout_seconds <= 0:
             raise ValueError("SEC timeout must be greater than zero")
+        if ticker_mapping_ttl_seconds <= 0:
+            raise ValueError("SEC ticker mapping TTL must be greater than zero")
 
         # SEC requires an identifying User-Agent. Keep all request policy in
         # this client so callers cannot accidentally omit it.
@@ -84,9 +98,17 @@ class SecEdgarClient:
         # real client it creates here.
         self._http = http_client or httpx.Client()
         self._owns_http_client = http_client is None
-        # The ticker mapping changes slowly, so cache it for this process and
-        # avoid downloading the whole SEC mapping for every ticker request.
+        # The ticker mapping changes slowly, so cache it and avoid downloading
+        # the whole SEC mapping for every ticker request. It still expires:
+        # new listings and renamed tickers must resolve without a restart.
         self._companies_by_ticker: dict[str, SecCompany] | None = None
+        self._ticker_mapping_ttl = ticker_mapping_ttl_seconds
+        self._ticker_mapping_expires_at = 0.0
+        # A monotonic clock cannot jump when the system time is adjusted.
+        self._monotonic = monotonic
+        # Requests run on worker threads. One lock means an expired mapping is
+        # downloaded once, not once per concurrent request.
+        self._ticker_mapping_lock = threading.Lock()
 
     def close(self) -> None:
         """Close the internally created HTTP client, if this instance owns it."""
@@ -177,9 +199,32 @@ class SecEdgarClient:
         return normalized_ticker
 
     def _get_companies_by_ticker(self) -> dict[str, SecCompany]:
-        if self._companies_by_ticker is not None:
-            return self._companies_by_ticker
+        with self._ticker_mapping_lock:
+            now = self._monotonic()
+            current = self._companies_by_ticker
+            if current is not None and now < self._ticker_mapping_expires_at:
+                return current
 
+            try:
+                companies = self._download_companies_by_ticker()
+            except SecEdgarError:
+                if current is None:
+                    raise
+                # A day-old mapping is still right for nearly every ticker, so
+                # a failed refresh should not take ticker lookup down with it.
+                logger.warning(
+                    "SEC ticker mapping refresh failed; keeping the previous mapping"
+                )
+                self._ticker_mapping_expires_at = (
+                    now + self.TICKER_MAPPING_RETRY_SECONDS
+                )
+                return current
+
+            self._companies_by_ticker = companies
+            self._ticker_mapping_expires_at = now + self._ticker_mapping_ttl
+            return companies
+
+    def _download_companies_by_ticker(self) -> dict[str, SecCompany]:
         payload = self._get_json(self.TICKER_MAPPING_URL)
         if not isinstance(payload, dict):
             raise SecPayloadError("SEC ticker mapping must be a JSON object")
@@ -218,7 +263,6 @@ class SecEdgarClient:
         if not companies:
             raise SecPayloadError("SEC ticker mapping contains no valid companies")
 
-        self._companies_by_ticker = companies
         return companies
 
     def _get_json(self, url: str) -> Any:
