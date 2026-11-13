@@ -1,0 +1,45 @@
+# Runs the API and its own PostgreSQL together. This is a separate Compose
+# project from compose.yaml, with its own container names, network, and data
+# volume, so it can run next to the local development database without
+# touching it.
+#
+#   docker compose --env-file infra/postgres/.env -f compose.app.yaml up -d --build
+name: watchtower-app
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    env_file:
+      - ./infra/postgres/.env
+    # No published port: only the API reaches this database, over the project
+    # network. The development database keeps 127.0.0.1:5432 to itself.
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      # Runs on first initialization of an empty volume only.
+      - ./infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    image: watchtower-api:local
+    env_file:
+      - ./.env
+    environment:
+      # Inside the project network the database host is the service name, so
+      # this replaces any 127.0.0.1 URL that the env file carries for
+      # host-side runs. The three values are read from the file passed with
+      # --env-file; Compose stops with a clear message if one is missing.
+      WATCHTOWER_SNAPSHOT_DATABASE_URL: "postgres://${POSTGRES_USER:?set in infra/postgres/.env}:${POSTGRES_PASSWORD:?set in infra/postgres/.env}@postgres:5432/${POSTGRES_DB:?set in infra/postgres/.env}?sslmode=disable"
+    ports:
+      # Loopback only: the API has no authentication.
+      - "127.0.0.1:${WATCHTOWER_API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
