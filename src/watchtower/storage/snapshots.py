@@ -9,6 +9,7 @@ from typing import Protocol
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 
 from watchtower.schemas import CompanySnapshotResponse
 
@@ -36,44 +37,71 @@ class SnapshotStore(Protocol):
 class PostgresSnapshotStore:
     """Persist and retrieve complete validated snapshots using PostgreSQL."""
 
-    def __init__(self, connection: psycopg.Connection[dict[str, object]]) -> None:
-        self._connection = connection
+    APPLICATION_NAME = "watchtower-snapshot-cache"
+    # A cache lookup must never hold a request for long. When no healthy
+    # connection is available within this time the caller gets a cache miss.
+    CHECKOUT_TIMEOUT_SECONDS = 2.0
+
+    def __init__(self, pool: ConnectionPool) -> None:
+        self._pool = pool
 
     @classmethod
-    def connect(cls, database_url: str) -> PostgresSnapshotStore:
-        """Open and validate the optional local cache connection."""
+    def connect(
+        cls,
+        database_url: str,
+        *,
+        application_name: str = APPLICATION_NAME,
+        startup_timeout_seconds: float = 5.0,
+    ) -> PostgresSnapshotStore:
+        """Open and validate the optional local cache connection pool."""
 
+        # One long-lived connection dies for good when PostgreSQL restarts. A
+        # pool checks each connection as it is handed out, discards dead ones,
+        # and keeps reconnecting in the background.
+        pool = ConnectionPool(
+            database_url,
+            kwargs={
+                "autocommit": True,
+                "row_factory": dict_row,
+                "application_name": application_name,
+            },
+            min_size=1,
+            max_size=4,
+            open=False,
+            check=ConnectionPool.check_connection,
+            timeout=cls.CHECKOUT_TIMEOUT_SECONDS,
+            name=application_name,
+        )
+        store = cls(pool)
         try:
-            connection = psycopg.connect(
-                database_url,
-                autocommit=True,
-                row_factory=dict_row,
-            )
-            store = cls(connection)
+            pool.open(wait=True, timeout=startup_timeout_seconds)
             store._require_snapshot_table()
-            return store
         except psycopg.Error as error:
+            pool.close()
             raise SnapshotStoreError("connect to snapshot cache") from error
+        except SnapshotStoreError:
+            pool.close()
+            raise
+        return store
 
     def close(self) -> None:
-        """Release the database connection held for this application process."""
+        """Release the database connections held for this application process."""
 
-        self._connection.close()
+        self._pool.close()
 
     def load(self, ticker: str) -> CachedSnapshot | None:
         """Return the last stored snapshot for a normalized ticker, if any."""
 
         try:
-            with self._connection.cursor() as cursor:
-                cursor.execute(
+            with self._pool.connection() as connection:
+                row = connection.execute(
                     """
                     SELECT snapshot, cached_at
                     FROM company_snapshots
                     WHERE ticker = %s
                     """,
                     (ticker,),
-                )
-                row = cursor.fetchone()
+                ).fetchone()
         except psycopg.Error as error:
             raise SnapshotStoreError("load cached snapshot") from error
 
@@ -92,8 +120,8 @@ class PostgresSnapshotStore:
 
         payload = snapshot.model_dump(mode="json")
         try:
-            with self._connection.cursor() as cursor:
-                cursor.execute(
+            with self._pool.connection() as connection:
+                connection.execute(
                     """
                     INSERT INTO company_snapshots (ticker, snapshot, generated_at)
                     VALUES (%s, %s, %s)
@@ -110,11 +138,10 @@ class PostgresSnapshotStore:
     def _require_snapshot_table(self) -> None:
         """Fail clearly when an existing database has not received migration 003."""
 
-        with self._connection.cursor() as cursor:
-            cursor.execute(
+        with self._pool.connection() as connection:
+            row = connection.execute(
                 "SELECT to_regclass('public.company_snapshots') AS table_name"
-            )
-            row = cursor.fetchone()
+            ).fetchone()
         if row is None or row["table_name"] is None:
             raise SnapshotStoreError(
                 "company_snapshots table is missing; apply PostgreSQL migrations"

@@ -27,6 +27,11 @@ timestamps.
 - A provider failure returns the last stored response as `stale` when available.
 - A live response remains usable if the optional cache cannot be written.
 - The cache is enabled only when `WATCHTOWER_SNAPSHOT_DATABASE_URL` is set.
+- The store uses a small connection pool that checks each connection before
+  use. A single long-lived connection stayed dead after a PostgreSQL restart,
+  which silently disabled the cache until the application restarted. While no
+  healthy connection is available, a lookup gives up after two seconds and is
+  treated as a cache miss.
 
 The public response declares `snapshot_status` as `live`, `cached`, or
 `stale`. A cached response therefore cannot be mistaken for a current live

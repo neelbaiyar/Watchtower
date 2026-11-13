@@ -11,7 +11,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
     "pydantic>=2.13.5",
-    "psycopg[binary]>=3.3.3",
+    "psycopg[binary,pool]>=3.3.3",
     "uvicorn>=0.54.0",
     "yfinance>=1.7.0",
 ]
