@@ -13,8 +13,8 @@ import (
 
 var ErrInvalidConfiguration = errors.New("invalid PostgreSQL store configuration")
 
-// PostgresSeenStore persists observed SEC filings. It satisfies detector's
-// SeenStore contract while keeping SQL and connection-pool details separate.
+// PostgresSeenStore persists observed SEC filings and keeps SQL and
+// connection-pool details out of the polling code.
 type PostgresSeenStore struct {
 	pool *pgxpool.Pool
 }
