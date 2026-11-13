@@ -90,8 +90,7 @@ These describe what the code does today:
 - All SQL uses bound parameters in both the Python and Go code.
 - The dashboard inserts provider-supplied text as text content, never as HTML,
   and links are limited to URLs the API has validated as HTTP or HTTPS.
-
-Known limitation: Marketaux accepts its API token only as a URL query
-parameter. Watchtower never logs or returns that URL itself, but enabling
-request-level logging for the `httpx` library would write the token to your
-logs.
+- Marketaux accepts its API token only as a URL query parameter. The client
+  adds the token below the HTTP library's logging layer, so the token is absent
+  from request log lines and from request URLs attached to errors, including
+  when `httpx` request logging is enabled.

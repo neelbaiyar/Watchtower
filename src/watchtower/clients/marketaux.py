@@ -42,6 +42,36 @@ class NewsHeadline:
     source: str
 
 
+class _TokenQueryTransport(httpx.BaseTransport):
+    """Add the API token to the query string at the last possible moment.
+
+    Marketaux accepts its token only as a URL parameter. httpx logs every
+    request URL at INFO level and attaches the request to its exceptions, so a
+    token placed on the request itself ends up in logs as soon as someone
+    enables request logging. Adding it here, below the client, means the
+    request object that httpx logs and reports never contains it.
+    """
+
+    def __init__(self, inner: httpx.BaseTransport, api_token: str) -> None:
+        self._inner = inner
+        self._api_token = api_token
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        # Build a new request rather than editing this one: the caller keeps
+        # its reference to the original and logs that.
+        authenticated = httpx.Request(
+            request.method,
+            request.url.copy_merge_params({"api_token": self._api_token}),
+            headers=request.headers,
+            stream=request.stream,
+            extensions=request.extensions,
+        )
+        return self._inner.handle_request(authenticated)
+
+    def close(self) -> None:
+        self._inner.close()
+
+
 class MarketauxClient:
     """Retrieve ticker-specific financial headlines from Marketaux."""
 
@@ -53,7 +83,7 @@ class MarketauxClient:
         self,
         *,
         api_token: str,
-        http_client: httpx.Client | None = None,
+        transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = 10.0,
     ) -> None:
         normalized_token = api_token.strip()
@@ -63,17 +93,20 @@ class MarketauxClient:
             raise ValueError("news timeout must be greater than zero")
 
         # The token stays private inside the provider boundary and is never
-        # returned in a schema, log message, or public HTTP response.
-        self._api_token = normalized_token
+        # returned in a schema, log message, or public HTTP response. Tests
+        # pass a fake transport; it is wrapped the same way as the real one.
         self._timeout = timeout_seconds
-        self._http = http_client or httpx.Client()
-        self._owns_http_client = http_client is None
+        self._http = httpx.Client(
+            transport=_TokenQueryTransport(
+                transport or httpx.HTTPTransport(),
+                normalized_token,
+            )
+        )
 
     def close(self) -> None:
-        """Close the internally created HTTP client, if this instance owns it."""
+        """Close the HTTP client and its transport."""
 
-        if self._owns_http_client:
-            self._http.close()
+        self._http.close()
 
     def __enter__(self) -> MarketauxClient:
         return self
@@ -98,7 +131,6 @@ class MarketauxClient:
 
         payload = self._get_json(
             params={
-                "api_token": self._api_token,
                 "symbols": normalized_ticker,
                 "filter_entities": "true",
                 "language": "en",
