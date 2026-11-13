@@ -121,6 +121,15 @@ def create_app(
 
         return FileResponse(WEB_DIRECTORY / "index.html")
 
+    @app.get("/healthz", include_in_schema=False)
+    def get_health() -> dict[str, str]:
+        """Report that this process is up and answering HTTP requests."""
+
+        # Deliberately touches no provider and no database: a container health
+        # check runs every few seconds and must not spend the news quota or
+        # mark the API unhealthy because the optional cache is down.
+        return {"status": "ok"}
+
     # Route declarations and provider-error translation are registered after
     # the application object exists, keeping the factory easy to test.
     app.include_router(router)

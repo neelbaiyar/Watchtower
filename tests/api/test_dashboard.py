@@ -29,3 +29,17 @@ def test_dashboard_and_static_assets_are_served() -> None:
     assert "WATCHLIST_KEY" in script.text
     assert "SELECTED_TICKER_KEY" in script.text
     assert "snapshot.snapshot_status" in script.text
+
+
+def test_health_endpoint_answers_without_calling_the_service() -> None:
+    class ExplodingService:
+        def get_company_snapshot(self, *_: object, **__: object) -> None:
+            raise AssertionError("health check must not build a snapshot")
+
+    with TestClient(create_app(snapshot_service=ExplodingService())) as client:
+        response = client.get("/healthz")
+        openapi = client.get("/openapi.json").json()
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert "/healthz" not in openapi["paths"]
