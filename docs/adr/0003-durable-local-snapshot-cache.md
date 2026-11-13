@@ -23,7 +23,11 @@ timestamps.
 
 - A fresh entry is returned as `cached` without making provider calls.
 - A browser or API caller can use `refresh=true` to force a live provider
-  refresh.
+  refresh. A per-ticker cooldown (60 seconds by default) ignores the flag while
+  the stored snapshot is younger than that, because the endpoint is
+  unauthenticated and each live snapshot spends one request from a small daily
+  news quota. The cooldown is read from the stored `cached_at` time rather than
+  an in-memory timer, so it survives restarts.
 - A provider failure returns the last stored response as `stale` when available.
 - A live response remains usable if the optional cache cannot be written.
 - The cache is enabled only when `WATCHTOWER_SNAPSHOT_DATABASE_URL` is set.

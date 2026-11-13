@@ -80,6 +80,9 @@ def create_app(
                 snapshot_cache_ttl=timedelta(
                     seconds=active_settings.snapshot_cache_ttl_seconds
                 ),
+                refresh_cooldown=timedelta(
+                    seconds=active_settings.snapshot_refresh_cooldown_seconds
+                ),
             )
             try:
                 yield

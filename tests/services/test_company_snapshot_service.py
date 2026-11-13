@@ -539,3 +539,92 @@ def test_old_filings_and_headlines_do_not_raise_the_public_signal() -> None:
         "price_movement"
     ]
     assert snapshot.research_signal.level == "low_attention"
+
+
+def _service_with_stored_snapshot(
+    *,
+    stored_seconds_ago: int,
+    refresh_cooldown: timedelta | None = None,
+) -> tuple[CompanySnapshotService, FakeSecClient, FakeNewsClient, FakeSnapshotStore]:
+    now = datetime(2026, 9, 25, 16, 0, tzinfo=UTC)
+    store = FakeSnapshotStore(
+        _cached_hpe_snapshot(now - timedelta(seconds=stored_seconds_ago))
+    )
+    sec_client = FakeSecClient()
+    news_client = FakeNewsClient()
+    service = CompanySnapshotService(
+        sec_client=sec_client,
+        price_client=FakePriceClient(),
+        news_client=news_client,
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=store,
+        snapshot_cache_ttl=timedelta(minutes=5),
+        refresh_cooldown=refresh_cooldown,
+        clock=SequenceClock(now),
+    )
+    return service, sec_client, news_client, store
+
+
+def test_repeated_forced_refreshes_inside_the_cooldown_spend_no_provider_calls() -> (
+    None
+):
+    service, sec_client, news_client, store = _service_with_stored_snapshot(
+        stored_seconds_ago=10
+    )
+
+    snapshots = [
+        service.get_company_snapshot("HPE", force_refresh=True) for _ in range(25)
+    ]
+
+    assert {snapshot.snapshot_status for snapshot in snapshots} == {"cached"}
+    assert sec_client.requested_tickers == []
+    assert news_client.requested_tickers == []
+    assert store.saved_snapshots == []
+
+
+def test_forced_refresh_is_honored_once_the_cooldown_has_passed() -> None:
+    service, _, news_client, store = _service_with_stored_snapshot(
+        stored_seconds_ago=90
+    )
+
+    snapshot = service.get_company_snapshot("HPE", force_refresh=True)
+
+    assert snapshot.snapshot_status == "live"
+    assert news_client.requested_tickers == ["HPE"]
+    assert store.saved_snapshots == [snapshot]
+
+
+def test_zero_cooldown_honors_every_forced_refresh() -> None:
+    service, _, news_client, _ = _service_with_stored_snapshot(
+        stored_seconds_ago=0,
+        refresh_cooldown=timedelta(0),
+    )
+
+    snapshot = service.get_company_snapshot("HPE", force_refresh=True)
+
+    assert snapshot.snapshot_status == "live"
+    assert news_client.requested_tickers == ["HPE"]
+
+
+def test_cooldown_never_serves_a_snapshot_older_than_the_cache_ttl() -> None:
+    # A cooldown longer than the TTL must not keep an expired entry alive.
+    service, _, news_client, _ = _service_with_stored_snapshot(
+        stored_seconds_ago=400,
+        refresh_cooldown=timedelta(hours=1),
+    )
+
+    snapshot = service.get_company_snapshot("HPE", force_refresh=True)
+
+    assert snapshot.snapshot_status == "live"
+    assert news_client.requested_tickers == ["HPE"]
+
+
+def test_service_rejects_a_negative_refresh_cooldown() -> None:
+    with pytest.raises(ValueError, match="refresh cooldown"):
+        CompanySnapshotService(
+            sec_client=FakeSecClient(),
+            price_client=FakePriceClient(),
+            news_client=FakeNewsClient(),
+            signal_engine=FakeSignalEngine(),
+            refresh_cooldown=timedelta(seconds=-1),
+        )

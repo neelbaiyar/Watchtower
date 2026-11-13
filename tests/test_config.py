@@ -45,11 +45,13 @@ def test_settings_load_optional_cache_configuration() -> None:
             "WATCHTOWER_MARKETAUX_API_TOKEN": "private-token",
             "WATCHTOWER_SNAPSHOT_DATABASE_URL": "postgres://local-only",
             "WATCHTOWER_SNAPSHOT_CACHE_TTL_SECONDS": "120",
+            "WATCHTOWER_SNAPSHOT_REFRESH_COOLDOWN_SECONDS": "0",
         }
     )
 
     assert settings.snapshot_database_url == "postgres://local-only"
     assert settings.snapshot_cache_ttl_seconds == 120
+    assert settings.snapshot_refresh_cooldown_seconds == 0
     assert "postgres://local-only" not in repr(settings)
 
 
@@ -61,5 +63,28 @@ def test_settings_reject_invalid_cache_ttl(value: str) -> None:
                 "WATCHTOWER_SEC_USER_AGENT": "Watchtower test test@example.com",
                 "WATCHTOWER_MARKETAUX_API_TOKEN": "private-token",
                 "WATCHTOWER_SNAPSHOT_CACHE_TTL_SECONDS": value,
+            }
+        )
+
+
+def test_settings_default_refresh_cooldown_is_one_minute() -> None:
+    settings = Settings.from_environment(
+        {
+            "WATCHTOWER_SEC_USER_AGENT": "Watchtower test test@example.com",
+            "WATCHTOWER_MARKETAUX_API_TOKEN": "private-token",
+        }
+    )
+
+    assert settings.snapshot_refresh_cooldown_seconds == 60
+
+
+@pytest.mark.parametrize("value", ["soon", "-1", "1.5"])
+def test_settings_reject_invalid_refresh_cooldown(value: str) -> None:
+    with pytest.raises(ConfigurationError, match="REFRESH_COOLDOWN_SECONDS"):
+        Settings.from_environment(
+            {
+                "WATCHTOWER_SEC_USER_AGENT": "Watchtower test test@example.com",
+                "WATCHTOWER_MARKETAUX_API_TOKEN": "private-token",
+                "WATCHTOWER_SNAPSHOT_REFRESH_COOLDOWN_SECONDS": value,
             }
         )

@@ -152,9 +152,17 @@ provider is unavailable, enable the local PostgreSQL cache.
    ```
 
 With the default five-minute TTL, a selected ticker shows a `cached` snapshot
-until it expires. **Refresh sources** makes a live request immediately. If that
-live request fails and a prior snapshot exists, the dashboard shows it as
-`stale`, including its original generation time.
+until it expires. **Refresh sources** makes a live request, unless the stored
+snapshot for that ticker is less than 60 seconds old. Inside that cooldown the
+stored snapshot is returned as `cached` and no provider is called, so repeated
+refreshes cannot drain the Marketaux request budget. Set
+`WATCHTOWER_SNAPSHOT_REFRESH_COOLDOWN_SECONDS` to change the cooldown; `0`
+turns it off. If a live request fails and a prior snapshot exists, the
+dashboard shows it as `stale`, including its original generation time.
+
+The cooldown relies on the stored snapshot, so it applies only when the cache
+is enabled. Without the cache every request is live, with or without
+`refresh=true`.
 
 ## Run Watchtower
 
@@ -226,6 +234,7 @@ WATCHTOWER_POLLER_CIKS="your-ten-digit-cik,your-second-ten-digit-cik"
 # Optional: point the Python dashboard/API cache at the same local database.
 WATCHTOWER_SNAPSHOT_DATABASE_URL="postgres://watchtower:your-local-password@127.0.0.1:5432/watchtower?sslmode=disable"
 WATCHTOWER_SNAPSHOT_CACHE_TTL_SECONDS="300"
+WATCHTOWER_SNAPSHOT_REFRESH_COOLDOWN_SECONDS="60"
 ```
 
 Then run one bounded pass:

@@ -51,7 +51,9 @@ def get_company_snapshot(
         bool,
         Query(
             description=(
-                "Bypass a fresh local snapshot cache and request current provider data."
+                "Bypass a fresh local snapshot cache and request current provider "
+                "data. Ignored while the stored snapshot is younger than the "
+                "refresh cooldown, which protects the news request quota."
             )
         ),
     ] = False,

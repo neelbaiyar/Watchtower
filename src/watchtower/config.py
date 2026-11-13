@@ -21,6 +21,7 @@ class Settings:
     # Docker. Its URL is never included in repr output.
     snapshot_database_url: str | None = field(default=None, repr=False)
     snapshot_cache_ttl_seconds: int = 300
+    snapshot_refresh_cooldown_seconds: int = 60
 
     @classmethod
     def from_environment(
@@ -46,16 +47,20 @@ class Settings:
             raise ConfigurationError(f"Missing required environment variables: {names}")
 
         database_url = values.get("WATCHTOWER_SNAPSHOT_DATABASE_URL", "").strip()
-        ttl_value = values.get("WATCHTOWER_SNAPSHOT_CACHE_TTL_SECONDS", "300").strip()
-        try:
-            cache_ttl_seconds = int(ttl_value)
-        except ValueError as error:
-            raise ConfigurationError(
-                "WATCHTOWER_SNAPSHOT_CACHE_TTL_SECONDS must be a whole number"
-            ) from error
+        cache_ttl_seconds = _whole_number(
+            values, "WATCHTOWER_SNAPSHOT_CACHE_TTL_SECONDS", default="300"
+        )
         if cache_ttl_seconds <= 0:
             raise ConfigurationError(
                 "WATCHTOWER_SNAPSHOT_CACHE_TTL_SECONDS must be greater than zero"
+            )
+        # Zero is allowed here and turns the cooldown off.
+        refresh_cooldown_seconds = _whole_number(
+            values, "WATCHTOWER_SNAPSHOT_REFRESH_COOLDOWN_SECONDS", default="60"
+        )
+        if refresh_cooldown_seconds < 0:
+            raise ConfigurationError(
+                "WATCHTOWER_SNAPSHOT_REFRESH_COOLDOWN_SECONDS must not be negative"
             )
 
         return cls(
@@ -63,4 +68,12 @@ class Settings:
             marketaux_api_token=required["WATCHTOWER_MARKETAUX_API_TOKEN"],
             snapshot_database_url=database_url or None,
             snapshot_cache_ttl_seconds=cache_ttl_seconds,
+            snapshot_refresh_cooldown_seconds=refresh_cooldown_seconds,
         )
+
+
+def _whole_number(values: Mapping[str, str], name: str, *, default: str) -> int:
+    try:
+        return int(values.get(name, default).strip())
+    except ValueError as error:
+        raise ConfigurationError(f"{name} must be a whole number") from error

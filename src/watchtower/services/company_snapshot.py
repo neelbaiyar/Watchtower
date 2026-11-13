@@ -82,6 +82,7 @@ class CompanySnapshotService:
         signal_engine: ResearchSignalEngine,
         snapshot_store: SnapshotStore | None = None,
         snapshot_cache_ttl: timedelta | None = None,
+        refresh_cooldown: timedelta | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         # Dependencies enter at construction time instead of being created in
@@ -101,6 +102,14 @@ class CompanySnapshotService:
         self._snapshot_cache_ttl = snapshot_cache_ttl or timedelta(minutes=5)
         if self._snapshot_cache_ttl <= timedelta():
             raise ValueError("snapshot cache TTL must be greater than zero")
+        # Every live snapshot spends one request from a small daily news quota,
+        # and `refresh=true` is open to any caller. A stored snapshot younger
+        # than this is served instead of honoring another forced refresh.
+        self._refresh_cooldown = (
+            timedelta(seconds=60) if refresh_cooldown is None else refresh_cooldown
+        )
+        if self._refresh_cooldown < timedelta():
+            raise ValueError("refresh cooldown must not be negative")
 
     def get_company_snapshot(
         self,
@@ -112,8 +121,15 @@ class CompanySnapshotService:
 
         normalized_ticker = ticker.strip().upper()
         cached = self._load_cached_snapshot(normalized_ticker)
-        if cached is not None and not force_refresh and self._is_fresh(cached):
-            return self._with_snapshot_status(cached.snapshot, SnapshotStatus.CACHED)
+        if cached is not None:
+            age = self._now() - cached.cached_at
+            # The cooldown is measured from the stored snapshot, not from an
+            # in-memory timer, so it survives restarts and needs no extra state.
+            bypass_cache = force_refresh and age >= self._refresh_cooldown
+            if not bypass_cache and age <= self._snapshot_cache_ttl:
+                return self._with_snapshot_status(
+                    cached.snapshot, SnapshotStatus.CACHED
+                )
 
         try:
             snapshot = self._build_live_snapshot(ticker)
@@ -275,9 +291,6 @@ class CompanySnapshotService:
                 "snapshot cache write failed for %s: %s", snapshot.ticker, error
             )
             return
-
-    def _is_fresh(self, cached: CachedSnapshot) -> bool:
-        return self._now() - cached.cached_at <= self._snapshot_cache_ttl
 
     @staticmethod
     def _with_snapshot_status(
