@@ -93,7 +93,8 @@ provider without inventing a link.
 - Python 3.14
 - [`uv`](https://docs.astral.sh/uv/)
 - Go 1.27 or later, for the optional local poller
-- Docker Desktop, for the optional local PostgreSQL database
+- Docker Desktop, for the optional local PostgreSQL database or for running
+  the API in a container
 - A free [Marketaux](https://www.marketaux.com/) API token
 - A monitored email address for the SEC-declared `User-Agent`
 
@@ -210,6 +211,67 @@ reason.
 
 Stop the server with `Control-C`.
 
+## Run with Docker
+
+Two Compose files exist, and they are separate Compose projects:
+
+| File | Project | What it runs |
+| --- | --- | --- |
+| `compose.yaml` | `watchtower` | PostgreSQL only, published on `127.0.0.1:5432` for host-side development, the poller, and the integration tests. |
+| `compose.app.yaml` | `watchtower-app` | The API in a container plus its own PostgreSQL, which is not published to the host. |
+
+Because the projects have different names, container names, networks, and
+volumes, both can run at once. They do not share data: a snapshot cached by
+the containerized API is not visible to a host-side run, and the reverse.
+
+The API container reads the same two ignored files as a host-side run: the
+root `.env` for the SEC `User-Agent` and Marketaux token, and
+`infra/postgres/.env` for the database credentials. Create both first (see
+[Local setup](#local-setup) and [Optional local Go poller](#optional-local-go-poller)).
+The database password is placed in a connection URL, so use one made of
+letters and digits.
+
+Build the image and start both containers:
+
+```bash
+docker compose --env-file infra/postgres/.env -f compose.app.yaml up -d --build --wait
+```
+
+`--wait` returns once both health checks pass. Then open
+<http://127.0.0.1:8000/>. The API is published on the loopback address only.
+If port 8000 is taken, choose another:
+
+```bash
+WATCHTOWER_API_PORT=8001 docker compose --env-file infra/postgres/.env -f compose.app.yaml up -d --build --wait
+```
+
+Check status, health, and logs:
+
+```bash
+docker compose --env-file infra/postgres/.env -f compose.app.yaml ps
+curl --fail http://127.0.0.1:8000/healthz
+docker compose --env-file infra/postgres/.env -f compose.app.yaml logs -f api
+```
+
+`/healthz` reports only that the process is serving requests. It calls no
+provider and no database, so health checks do not spend the Marketaux budget.
+
+Stop and remove the containers and network. The database volume is kept, so
+cached snapshots survive:
+
+```bash
+docker compose --env-file infra/postgres/.env -f compose.app.yaml down
+```
+
+The image runs as a non-root user and contains the installed application
+only. `.dockerignore` keeps `.env` files, Git history, tests, and the poller
+out of the build context. The Go poller is not containerized: it is a one-shot
+command today, not a long-running service, and it runs from the host against
+the `compose.yaml` database.
+
+Do not paste the output of `docker compose config` anywhere: it prints the
+resolved environment, including the token and database password.
+
 ## Optional local Go poller
 
 The Go poller is local-only. Its explicit `--once` mode retrieves recent 8-Ks
@@ -300,6 +362,8 @@ uv run pytest -q
 - Marketaux's free plan is rate-limited.
 - PostgreSQL snapshot caching is optional; without its ignored local URL and a
   running Docker database, the FastAPI endpoint remains live-only.
+- The container setup is for one machine. There is no authentication, TLS, or
+  image registry, and the API port is published on the loopback address only.
 - The Go poller has an explicit one-shot mode, but no recurring scheduler.
 - The public signal is a transparent baseline, not a trained ML model, sentiment
   classifier, ranking system, knowledge graph, or consequence engine.
