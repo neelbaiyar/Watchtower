@@ -6,7 +6,11 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from watchtower.clients.marketaux import NewsHeadline
-from watchtower.clients.sec_edgar import SecCompany, SecFiling
+from watchtower.clients.sec_edgar import (
+    SecCompany,
+    SecFiling,
+    SecTickerNotFoundError,
+)
 from watchtower.clients.yfinance import DailyPriceSnapshot, PriceRequestError
 from watchtower.schemas import ResearchSignalResponse
 from watchtower.services.company_snapshot import (
@@ -434,3 +438,70 @@ def test_unavailable_cache_is_logged_and_does_not_block_a_live_snapshot(
         "snapshot cache read failed for HPE: load cached snapshot",
         "snapshot cache write failed for HPE: save cached snapshot",
     ]
+
+
+def _cached_hpe_snapshot(cached_at: datetime) -> CachedSnapshot:
+    live_service, _, _, _, _ = build_service(
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC))
+    )
+    return CachedSnapshot(
+        snapshot=live_service.get_company_snapshot("HPE"),
+        cached_at=cached_at,
+    )
+
+
+def test_expired_cache_entry_is_replaced_by_a_live_snapshot() -> None:
+    store = FakeSnapshotStore(
+        _cached_hpe_snapshot(datetime(2026, 9, 25, 15, 0, tzinfo=UTC))
+    )
+    sec_client = FakeSecClient()
+    service = CompanySnapshotService(
+        sec_client=sec_client,
+        price_client=FakePriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=store,
+        snapshot_cache_ttl=timedelta(minutes=5),
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    snapshot = service.get_company_snapshot("HPE")
+
+    assert snapshot.snapshot_status == "live"
+    assert sec_client.requested_tickers == ["HPE", "HPE"]
+    assert store.saved_snapshots == [snapshot]
+
+
+def test_unknown_ticker_is_not_masked_by_a_stored_snapshot() -> None:
+    class UnknownTickerSecClient(FakeSecClient):
+        def resolve_company(self, ticker: str) -> SecCompany:
+            raise SecTickerNotFoundError(f"no mapping for {ticker}")
+
+    store = FakeSnapshotStore(
+        _cached_hpe_snapshot(datetime(2026, 9, 25, 15, 0, tzinfo=UTC))
+    )
+    service = CompanySnapshotService(
+        sec_client=UnknownTickerSecClient(),
+        price_client=FakePriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=store,
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    with pytest.raises(SecTickerNotFoundError):
+        service.get_company_snapshot("HPE")
+
+
+def test_provider_failure_without_a_stored_snapshot_is_raised() -> None:
+    service = CompanySnapshotService(
+        sec_client=FakeSecClient(),
+        price_client=FailingPriceClient(),
+        news_client=FakeNewsClient(),
+        signal_engine=FakeSignalEngine(),
+        snapshot_store=FakeSnapshotStore(),
+        clock=SequenceClock(datetime(2026, 9, 25, 16, 0, tzinfo=UTC)),
+    )
+
+    with pytest.raises(PriceRequestError):
+        service.get_company_snapshot("HPE")

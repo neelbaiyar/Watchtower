@@ -8,6 +8,7 @@ import pytest
 
 from watchtower.clients.yfinance import (
     PriceNotFoundError,
+    PricePayloadError,
     PriceRequestError,
     YFinanceClient,
 )
@@ -92,3 +93,56 @@ def test_provider_failure_does_not_leak_details() -> None:
 
     assert str(error.value) == "price provider request failed"
     assert "provider-internal-details" not in str(error.value)
+
+
+def test_single_close_has_no_daily_change() -> None:
+    history = pd.DataFrame(
+        {"Close": [float("nan"), 102.0]},
+        index=pd.to_datetime(["2026-09-24", "2026-09-25"], utc=True),
+    )
+    client = YFinanceClient(ticker_factory=lambda _: FakeTicker(history))
+
+    quote = client.get_daily_price("HPE")
+
+    assert quote.latest_close == 102.0
+    assert quote.previous_close is None
+    assert quote.change is None
+    assert quote.change_percent is None
+
+
+@pytest.mark.parametrize(
+    ("closes", "metadata"),
+    [
+        ([100.0, 0.0], {"currency": "USD"}),
+        ([100.0, -5.0], {"currency": "USD"}),
+        ([100.0, float("inf")], {"currency": "USD"}),
+        ([100.0, 102.0], {}),
+        ([100.0, 102.0], {"currency": "  "}),
+        ([100.0, 102.0], ["USD"]),
+    ],
+)
+def test_unusable_price_data_raises_owned_payload_error(
+    closes: list[float],
+    metadata: object,
+) -> None:
+    history = pd.DataFrame(
+        {"Close": closes},
+        index=pd.to_datetime(["2026-09-24", "2026-09-25"], utc=True),
+    )
+    client = YFinanceClient(
+        ticker_factory=lambda _: FakeTicker(history, metadata=metadata)
+    )
+
+    with pytest.raises(PricePayloadError):
+        client.get_daily_price("HPE")
+
+
+def test_history_without_a_close_column_raises_owned_payload_error() -> None:
+    history = pd.DataFrame(
+        {"Open": [100.0]},
+        index=pd.to_datetime(["2026-09-25"], utc=True),
+    )
+    client = YFinanceClient(ticker_factory=lambda _: FakeTicker(history))
+
+    with pytest.raises(PricePayloadError):
+        client.get_daily_price("HPE")
