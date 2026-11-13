@@ -106,7 +106,12 @@ function removeTicker(ticker) {
   if (removedSelectedTicker) {
     state.selectedTicker = state.watchlist[0] || null;
     saveSelectedTicker();
-    if (state.selectedTicker === null) showState("empty");
+    if (state.selectedTicker === null) {
+      // Nothing is selected any more, so drop the removed ticker's request.
+      if (activeRequest) activeRequest.abort();
+      activeRequest = null;
+      showState("empty");
+    }
   }
   renderWatchlist();
   if (removedSelectedTicker && state.selectedTicker !== null) {
@@ -128,21 +133,34 @@ function showState(name) {
   elements.snapshot.hidden = name !== "snapshot";
 }
 
+let activeRequest = null;
+
 async function loadSnapshot(ticker, { forceRefresh = false } = {}) {
+  // Responses can arrive out of order. Cancel the previous request so a slow
+  // answer for an earlier ticker cannot overwrite the one now selected.
+  if (activeRequest) activeRequest.abort();
+  const request = new AbortController();
+  activeRequest = request;
+
   showState("loading");
   elements.loadingTitle.textContent = `Building ${ticker}'s research snapshot`;
 
   try {
     const refresh = forceRefresh ? "?refresh=true" : "";
-    const response = await fetch(`/companies/${encodeURIComponent(ticker)}/snapshot${refresh}`);
+    const response = await fetch(`/companies/${encodeURIComponent(ticker)}/snapshot${refresh}`, {
+      signal: request.signal,
+    });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.detail || `Watchtower returned ${response.status}.`);
     }
 
-    renderSnapshot(await response.json());
+    const snapshot = await response.json();
+    if (request !== activeRequest) return;
+    renderSnapshot(snapshot);
     showState("snapshot");
   } catch (error) {
+    if (request !== activeRequest) return;
     elements.errorTitle.textContent = `Watchtower could not load ${ticker}.`;
     elements.errorDetail.textContent = error instanceof Error ? error.message : "Unknown error.";
     showState("error");
