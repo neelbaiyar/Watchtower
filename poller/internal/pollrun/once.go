@@ -27,6 +27,10 @@ type PollRecorder interface {
 
 // RunOnce polls each configured CIK exactly once, persists its result, then
 // returns. It has no timer and never starts background work by itself.
+//
+// A failure for one CIK does not stop the others: a single delisted or
+// misconfigured company would otherwise block every CIK listed after it on
+// every run. The returned error joins all per-CIK failures.
 func RunOnce(
 	ctx context.Context,
 	ciks []string,
@@ -41,14 +45,20 @@ func RunOnce(
 
 	// This first command is intentionally sequential. Scheduling, concurrency,
 	// and rate limiting require their own milestone and explicit safety rules.
+	var failures []error
 	for _, cik := range ciks {
-		filings, err := source.Recent8K(ctx, cik, filingLimit)
-		if err != nil {
-			return fmt.Errorf("retrieve SEC filings for %s: %w", cik, err)
+		// Cancellation is not a per-CIK problem; stop instead of failing the
+		// remaining companies one by one.
+		if err := ctx.Err(); err != nil {
+			failures = append(failures, err)
+			break
 		}
-		result, err := recorder.RecordPoll(ctx, cik, filings)
+
+		result, err := pollOne(ctx, cik, filingLimit, source, recorder)
 		if err != nil {
-			return fmt.Errorf("record SEC filings for %s: %w", cik, err)
+			logger.Printf("failed CIK=%s", cik)
+			failures = append(failures, err)
+			continue
 		}
 
 		// Log counts and identifiers, not provider JSON or credentials. These
@@ -62,5 +72,23 @@ func RunOnce(
 		)
 	}
 
-	return nil
+	return errors.Join(failures...)
+}
+
+func pollOne(
+	ctx context.Context,
+	cik string,
+	filingLimit int,
+	source FilingSource,
+	recorder PollRecorder,
+) (storage.PollResult, error) {
+	filings, err := source.Recent8K(ctx, cik, filingLimit)
+	if err != nil {
+		return storage.PollResult{}, fmt.Errorf("retrieve SEC filings for %s: %w", cik, err)
+	}
+	result, err := recorder.RecordPoll(ctx, cik, filings)
+	if err != nil {
+		return storage.PollResult{}, fmt.Errorf("record SEC filings for %s: %w", cik, err)
+	}
+	return result, nil
 }

@@ -5,6 +5,7 @@ package pollrun
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"testing"
@@ -42,14 +43,61 @@ func TestRunOncePollsEachConfiguredCIK(t *testing.T) {
 	}
 }
 
+func TestRunOnceContinuesPastAFailingCIK(t *testing.T) {
+	t.Parallel()
+
+	source := &fakeSource{
+		filingsByCIK: map[string][]edgar.Filing{
+			"0000789019": {testFiling("0000789019", "0000789019-26-000001")},
+		},
+		failingCIKs: map[string]error{"0000320193": edgar.ErrRequestFailed},
+	}
+	recorder := &fakeRecorder{}
+	var output bytes.Buffer
+
+	err := RunOnce(context.Background(), []string{"0000320193", "0000789019"}, 5, source, recorder, log.New(&output, "", 0))
+
+	if !errors.Is(err, edgar.ErrRequestFailed) {
+		t.Fatalf("RunOnce() error = %v, want the failing CIK's error", err)
+	}
+	if strings.Join(recorder.recordedCIKs, ",") != "0000789019" {
+		t.Errorf("recorded CIKs = %#v, want only the healthy CIK", recorder.recordedCIKs)
+	}
+	if !strings.Contains(output.String(), "failed CIK=0000320193") {
+		t.Errorf("log output = %q, want the failing CIK named", output.String())
+	}
+}
+
+func TestRunOnceStopsWhenContextIsCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	source := &fakeSource{}
+	var output bytes.Buffer
+
+	err := RunOnce(ctx, []string{"0000320193", "0000789019"}, 5, source, &fakeRecorder{}, log.New(&output, "", 0))
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunOnce() error = %v, want context.Canceled", err)
+	}
+	if len(source.requestedCIKs) != 0 {
+		t.Errorf("source CIKs = %#v, want no requests after cancellation", source.requestedCIKs)
+	}
+}
+
 type fakeSource struct {
-	// requestedCIKs is an observation log used by the assertion above.
+	// requestedCIKs is an observation log used by the assertions above.
 	filingsByCIK  map[string][]edgar.Filing
+	failingCIKs   map[string]error
 	requestedCIKs []string
 }
 
 func (source *fakeSource) Recent8K(_ context.Context, cik string, _ int) ([]edgar.Filing, error) {
 	source.requestedCIKs = append(source.requestedCIKs, cik)
+	if err := source.failingCIKs[cik]; err != nil {
+		return nil, err
+	}
 	return source.filingsByCIK[cik], nil
 }
 
