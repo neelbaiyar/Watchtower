@@ -51,8 +51,8 @@ Please allow a fix to be published before disclosing the issue publicly.
 ## Scope
 
 Watchtower is designed to run on a single developer machine. The documented
-commands bind the API to `127.0.0.1`, and the Compose file publishes PostgreSQL
-on `127.0.0.1` only.
+commands bind the API to `127.0.0.1`, and the Compose files publish ports on
+`127.0.0.1` only.
 
 In scope:
 
@@ -90,6 +90,8 @@ These describe what the code does today:
 - All SQL uses bound parameters in both the Python and Go code.
 - The dashboard inserts provider-supplied text as text content, never as HTML,
   and links are limited to URLs the API has validated as HTTP or HTTPS.
+- The API container image runs as a non-root user, and `.dockerignore` keeps
+  `.env` files out of the image build context.
 - Marketaux accepts its API token only as a URL query parameter. The client
   adds the token below the HTTP library's logging layer, so the token is absent
   from request log lines and from request URLs attached to errors, including
