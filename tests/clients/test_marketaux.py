@@ -94,9 +94,10 @@ def test_authentication_errors_are_owned(status_code: int) -> None:
     assert "provider-auth-details" not in str(error.value)
 
 
-def test_rate_limit_has_a_distinct_owned_error() -> None:
+@pytest.mark.parametrize("status_code", [402, 429])
+def test_rate_limit_has_a_distinct_owned_error(status_code: int) -> None:
     def handle_request(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(429, text="provider-rate-limit-details")
+        return httpx.Response(status_code, text="provider-rate-limit-details")
 
     client, http_client = build_client(httpx.MockTransport(handle_request))
     try:

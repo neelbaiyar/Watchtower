@@ -131,7 +131,9 @@ class MarketauxClient:
         # of treating bad credentials and temporary rate limits the same way.
         if response.status_code in {401, 403}:
             raise NewsAuthenticationError("news provider rejected credentials")
-        if response.status_code == 429:
+        # Marketaux answers 402 when the plan's daily quota is spent and 429
+        # for per-minute throttling. Both mean "out of budget, try later".
+        if response.status_code in {402, 429}:
             raise NewsRateLimitError("news provider rate limit reached")
         if response.is_error:
             raise NewsRequestError("news provider request failed")
