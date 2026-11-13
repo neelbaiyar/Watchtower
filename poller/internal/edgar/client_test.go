@@ -84,3 +84,88 @@ func TestRecent8KReturnsRequestErrorForNonSuccessStatus(t *testing.T) {
 		t.Fatalf("Recent8K() error = %v, want ErrRequestFailed", err)
 	}
 }
+
+func TestRecent8KRejectsUnusablePayloads(t *testing.T) {
+	t.Parallel()
+
+	payloads := map[string]string{
+		"missing filings object": `{"cik": "320193"}`,
+		"missing one array":      `{"filings": {"recent": {"accessionNumber": [], "form": []}}}`,
+		"mismatched lengths": `{"filings": {"recent": {
+			"accessionNumber": ["0001"], "form": ["8-K", "8-K"], "filingDate": ["2026-09-21"]
+		}}}`,
+		"invalid filing date": `{"filings": {"recent": {
+			"accessionNumber": ["0001"], "form": ["8-K"], "filingDate": ["21/09/2026"]
+		}}}`,
+		"empty accession number": `{"filings": {"recent": {
+			"accessionNumber": [""], "form": ["8-K"], "filingDate": ["2026-09-21"]
+		}}}`,
+		"not JSON": `<html>rate limited</html>`,
+	}
+	for name, payload := range payloads {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(payload))
+			}))
+			defer server.Close()
+
+			client, err := NewClient(server.URL, "Watchtower test@example.com", server.Client())
+			if err != nil {
+				t.Fatalf("NewClient() error = %v", err)
+			}
+
+			_, err = client.Recent8K(context.Background(), "0000320193", 5)
+			if !errors.Is(err, ErrInvalidPayload) {
+				t.Fatalf("Recent8K() error = %v, want ErrInvalidPayload", err)
+			}
+		})
+	}
+}
+
+func TestRecent8KAcceptsACompanyWithNoRecentFilings(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"filings": {"recent": {"accessionNumber": [], "form": [], "filingDate": []}}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "Watchtower test@example.com", server.Client())
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	filings, err := client.Recent8K(context.Background(), "0000320193", 5)
+	if err != nil {
+		t.Fatalf("Recent8K() error = %v", err)
+	}
+	if len(filings) != 0 {
+		t.Errorf("len(filings) = %d, want 0", len(filings))
+	}
+}
+
+func TestRecent8KValidatesArgumentsBeforeAnyRequest(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("unexpected request for invalid arguments")
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "Watchtower test@example.com", server.Client())
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	if _, err := client.Recent8K(context.Background(), "320193", 5); !errors.Is(err, ErrInvalidCIK) {
+		t.Errorf("short CIK error = %v, want ErrInvalidCIK", err)
+	}
+	if _, err := client.Recent8K(context.Background(), "../../admin", 5); !errors.Is(err, ErrInvalidCIK) {
+		t.Errorf("non-digit CIK error = %v, want ErrInvalidCIK", err)
+	}
+	if _, err := client.Recent8K(context.Background(), "0000320193", 0); !errors.Is(err, ErrInvalidLimit) {
+		t.Errorf("zero limit error = %v, want ErrInvalidLimit", err)
+	}
+}

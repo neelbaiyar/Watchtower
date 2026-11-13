@@ -123,6 +123,15 @@ type recentFilingsPayload struct {
 }
 
 func (recent recentFilingsPayload) normalized8K(cik string, limit int) ([]Filing, error) {
+	// encoding/json leaves a slice nil when its key is absent, while an empty
+	// JSON array decodes to an empty non-nil slice. Without this check a 200
+	// response with an unexpected shape reads as "company has no filings", and
+	// the first such poll would record an empty baseline: every existing 8-K
+	// would then look new on the next run.
+	if recent.AccessionNumbers == nil || recent.Forms == nil || recent.FilingDates == nil {
+		return nil, fmt.Errorf("%w: recent filing fields are missing", ErrInvalidPayload)
+	}
+
 	// The SEC encodes each filing across parallel arrays. Equal lengths are the
 	// minimum proof that matching indexes still refer to one disclosure.
 	if len(recent.AccessionNumbers) != len(recent.Forms) ||
